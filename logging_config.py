@@ -33,13 +33,26 @@ def log_sql_execution(query: str, result_summary: str):
 
 
 def log_rag_retrieval(query: str, sources_summary: str):
-    content = f"[bold blue]Búsqueda Semántica en Pinecone:[/bold blue] {query}\n\n[bold blue]Evidencia Documental Recuperada (bge-large):[/bold blue]\n{sources_summary}"
-    console.print(Panel(content, title="Spoke: RAG Tool (Pinecone + bge-large)", border_style="blue"))
+    content = f"[bold blue]Consulta Normativa:[/bold blue] {query}\n\n[bold blue]Síntesis Normativa y Evidencia Oficial:[/bold blue]\n{sources_summary}"
+    console.print(Panel(content, title="Spoke: RAG Agent (Gemini 3.6 Flash + Pinecone)", border_style="blue"))
 
 
-def log_final_response(answer: str):
+def log_chart_generation(title: str, chart_type: str, chart_path: str, summary: str):
+    content = (
+        f"[bold magenta]Título:[/bold magenta] {title}\n"
+        f"[bold magenta]Tipo:[/bold magenta] {chart_type}\n"
+        f"[bold magenta]Archivo PNG:[/bold magenta] {chart_path}\n\n"
+        f"{summary}"
+    )
+    console.print(Panel(content, title="Spoke: Chart Tool (Matplotlib PNG)", border_style="magenta"))
+
+
+def log_final_response(answer: str, chart_path: str | None = None):
     console.print()
-    console.print(Panel(answer, title="Respuesta Final - Data Steward Banamex", border_style="bold bright_green"))
+    body = answer
+    if chart_path:
+        body += f"\n\n[bold magenta]Gráfica adjunta guardada en:[/bold magenta] {chart_path}"
+    console.print(Panel(body, title="Respuesta Final - Data Steward Banamex", border_style="bold bright_green"))
 
 
 def log_fatal_error(message: str):

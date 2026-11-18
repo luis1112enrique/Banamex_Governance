@@ -27,18 +27,31 @@ class AgentState(TypedDict):
     
     # Pregunta actual del usuario
     question: str
+
+    # Rol del usuario autenticado ('universal' = acceso total a SQL, 'cliente' = restringido a su propio num_cte)
+    user_role: Optional[str]
+
+    # Identificador único del cliente en PostgreSQL (dim.dim_cliente.num_cte). None cuando user_role == 'universal'.
+    cliente_id: Optional[int]
     
     # Razonamiento y plan del Coordinador (Hub)
     plan: Optional[str]
     
-    # Siguiente agente a invocar ('sql_agent', 'rag_agent' o 'FINISH')
+    # Siguiente agente a invocar ('sql_agent', 'rag_agent', 'chart_tool' o 'FINISH')
     next_agent: Optional[str]
 
     # Instrucción técnica contextualizada y enriquecida que el Coordinador le envía al Spoke
+    # (Para 'chart_tool', contiene el JSON estructurado con los datos y ejes a graficar)
     spoke_instruction: Optional[str]
     
     # Almacén de evidencias recopiladas por los agentes especializados durante el turno
     evidences: Annotated[Dict[str, Any], merge_evidences]
+
+    # Ruta absoluta al archivo PNG generado por 'chart_tool' (Patrón Claim Check: nunca bytes en el estado)
+    chart_path: Optional[str]
+
+    # Contador de saltos (delegaciones) dentro del turno actual para prevenir bucles infinitos en multi-hop
+    step_count: Optional[int]
     
     # Respuesta final formulada y validada por el Data Steward
     final_answer: Optional[str]

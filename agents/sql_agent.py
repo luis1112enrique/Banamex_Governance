@@ -2,18 +2,24 @@
 agents/sql_agent.py
 
 Spoke especializado en análisis relacional Text-to-SQL para Banamex.
-Conecta a la base de datos PostgreSQL (reto_banamex) y utiliza Google Gemini (gemini-3.5-flash-lite)
-incorporando la capa semántica y reglas de negocio bancarias (documentacion_arquitectura_sql.txt)
-para garantizar consultas precisas, respetando los esquemas 'dim' y 'cfg'.
+Conecta a la base de datos PostgreSQL (reto_banamex) y utiliza Google Gemini
+incorporando la capa semántica, reglas de negocio bancarias y controles
+estrictos de Gobernanza de Datos / RBAC (Row-Level Security):
+  - Rol 'universal': Acceso analítico completo (solo lectura) a todo el esquema.
+  - Rol 'cliente': Acceso restringido EXCLUSIVAMENTE a su propio `num_cte`
+    (protección en doble capa: directiva de prompt + validador SQL determinista).
 """
 
 import os
 import re
 from pathlib import Path
+from typing import Optional, Tuple, Dict, Any
 from dotenv import load_dotenv
+from sqlalchemy import text
 
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 from langchain_community.utilities import SQLDatabase
+from langsmith import traceable
 
 from agents.llm import get_gemini_llm
 
@@ -28,6 +34,19 @@ SQL_MODEL = os.environ.get("SQL_MODEL", "gemini-3.5-flash")
 
 DB_URI = f"postgresql+psycopg2://{PGUSER}:{PGPASSWORD}@{PGHOST}:{PGPORT}/{PGDATABASE}?options=-csearch_path=dim,cfg,public"
 
+# Tablas que contienen datos sensibles de clientes, saldos o transacciones (requieren RLS en rol 'cliente')
+RESTRICTED_TABLES = (
+    "dim_cliente",
+    "fact_sdos_captacoloca_m",
+    "fact_txn_captacoloca_d",
+)
+
+# Palabras clave prohibidas en cualquier consulta (política estricta de solo lectura)
+FORBIDDEN_SQL_KEYWORDS = (
+    "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE",
+    "CREATE", "GRANT", "REVOKE", "COPY", "EXECUTE", "CALL", "MERGE"
+)
+
 
 def get_db_instance() -> SQLDatabase:
     return SQLDatabase.from_uri(DB_URI)
@@ -38,22 +57,177 @@ def get_sql_llm():
     return get_gemini_llm(SQL_MODEL)
 
 
-def extract_clean_sql(text: str) -> str:
+def validate_cliente_id(raw_input: str) -> Tuple[bool, Optional[int], Optional[Dict[str, Any]]]:
+    """
+    Valida que el ID ingresado por un cliente final sea un entero válido y exista
+    en la tabla maestra `dim.dim_cliente` (columna `num_cte`, rango actual 1 a 5000).
+    Utiliza consulta parametrizada para evitar SQL Injection.
+    """
+    cleaned = (raw_input or "").strip()
+    if not cleaned.isdigit():
+        return False, None, None
+
+    cid = int(cleaned)
+    if cid <= 0:
+        return False, None, None
+
+    db = get_db_instance()
+    try:
+        with db._engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT num_cte, tipo_persona, genero_cte, segmento_cte, fec_alta "
+                    "FROM dim.dim_cliente WHERE num_cte = :cid"
+                ),
+                {"cid": cid},
+            ).fetchone()
+
+        if not row:
+            return False, None, None
+
+        profile = {
+            "num_cte": row[0],
+            "tipo_persona": row[1],
+            "genero_cte": row[2],
+            "segmento_cte": row[3],
+            "fec_alta": str(row[4]),
+        }
+        return True, cid, profile
+    finally:
+        db._engine.dispose()
+
+
+def extract_clean_sql(text_raw: str) -> str:
     """Extrae la sentencia SQL limpia eliminando etiquetas markdown y explicaciones."""
-    text = text.replace("[SQL]", "").strip()
+    cleaned = text_raw.replace("[SQL]", "").strip()
 
     # Bloque de código ```sql ... ```
-    match = re.search(r"```(?:sql)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
+    match = re.search(r"```(?:sql)?\s*(.*?)\s*```", cleaned, re.DOTALL | re.IGNORECASE)
     if match:
-        text = match.group(1).strip()
+        cleaned = match.group(1).strip()
 
     # Coincidencia con sentencia SQL (SELECT o WITH)
-    match = re.search(r"\b(SELECT|WITH)\b.*?(?:;|\Z)", text, re.DOTALL | re.IGNORECASE)
+    match = re.search(r"\b(SELECT|WITH)\b.*?(?:;|\Z)", cleaned, re.DOTALL | re.IGNORECASE)
     if match:
         return match.group(0).strip()
 
-    lineas = [l for l in text.splitlines() if not l.strip().startswith("###") and not l.strip().startswith("Given the")]
+    lineas = [l for l in cleaned.splitlines() if not l.strip().startswith("###") and not l.strip().startswith("Given the")]
     return "\n".join(lineas).strip()
+
+
+@traceable(run_type="tool", name="rbac_sql_validator")
+def validate_sql_for_role(sql: str, user_role: str, cliente_id: Optional[int]) -> Tuple[bool, str]:
+    """
+    Validador determinista de Gobernanza de Datos (Capa 2 de defensa en profundidad).
+    Verifica ANTES de ejecutar en PostgreSQL que:
+      1. La sentencia sea estrictamente de solo lectura (SELECT / WITH) y única.
+      2. Si `user_role == 'cliente'`, toda rama que consulte tablas de clientes, saldos
+         o transacciones filtre obligatoriamente por `num_cte = {cliente_id}` sin bypasses.
+    """
+    sql_clean = sql.strip()
+    # Eliminar comentarios SQL para evitar evasiones
+    sql_no_comments = re.sub(r"--.*?$", "", sql_clean, flags=re.MULTILINE)
+    sql_no_comments = re.sub(r"/\*.*?\*/", "", sql_no_comments, flags=re.DOTALL).strip()
+
+    # 1. Bloquear múltiples sentencias separadas por punto y coma
+    trimmed_semi = sql_no_comments.rstrip(";").strip()
+    if ";" in trimmed_semi:
+        return False, "Consulta bloqueada: no se permiten múltiples sentencias SQL."
+
+    # 2. Verificar solo lectura
+    if not re.match(r"^(SELECT|WITH)\b", trimmed_semi, flags=re.IGNORECASE):
+        return False, "Consulta bloqueada: únicamente se permiten sentencias SELECT de solo lectura."
+
+    for kw in FORBIDDEN_SQL_KEYWORDS:
+        if re.search(rf"\b{kw}\b", trimmed_semi, flags=re.IGNORECASE):
+            return False, f"Consulta bloqueada por política de solo lectura (operación no permitida: {kw})."
+
+    # Si el rol es universal, solo aplican las reglas de solo lectura
+    if user_role == "universal":
+        return True, "OK"
+
+    # 3. Validaciones estrictas de Row-Level Security para rol 'cliente'
+    if user_role != "cliente" or cliente_id is None:
+        return False, "Acceso denegado: sesión de usuario sin rol o cliente_id válido."
+
+    # Bloquear patrones clásicos de bypass / SQL injection / acceso a otros clientes
+    bypass_patterns = [
+        r"\bOR\s+1\s*=\s*1\b",
+        r"\bOR\s+TRUE\b",
+        r"\bnum_cte\s*(!=|<>|<|>|<=|>=|\bIN\b|\bBETWEEN\b|\bIS\s+NOT\b)",
+        r"\bNOT\s+[\w\.]*num_cte\b",
+    ]
+    for pat in bypass_patterns:
+        if re.search(pat, trimmed_semi, flags=re.IGNORECASE):
+            return False, "Acceso denegado por Secreto Bancario: patrón de filtro no permitido para rol cliente."
+
+    # Revisar cada rama UNION / INTERSECT / EXCEPT de forma independiente
+    branches = re.split(r"\b(?:UNION(?:\s+ALL)?|INTERSECT|EXCEPT)\b", trimmed_semi, flags=re.IGNORECASE)
+    for branch in branches:
+        touches_restricted = any(
+            re.search(rf"\b{tbl}\b", branch, flags=re.IGNORECASE) for tbl in RESTRICTED_TABLES
+        )
+        if not touches_restricted:
+            # Permite consultas puras a catálogos públicos (dim_producto, dim_txn)
+            continue
+
+        # Buscar todas las igualdades sobre num_cte (con o sin alias de tabla, ej. c.num_cte = 1)
+        matches = re.findall(r"\b(?:[a-zA-Z_][a-zA-Z0-9_]*\.)?num_cte\s*=\s*(\d+)\b", branch, flags=re.IGNORECASE)
+        if not matches:
+            return (
+                False,
+                f"Acceso denegado por Secreto Bancario (RBAC): como cliente (num_cte = {cliente_id}), "
+                f"no puedes consultar datos globales ni de otros clientes; toda consulta sobre clientes, "
+                f"saldos o transacciones debe limitarse exclusivamente a tu propio num_cte = {cliente_id}."
+            )
+
+        # Ninguna igualdad puede apuntar a otro cliente distinto al autenticado
+        if any(int(m) != int(cliente_id) for m in matches):
+            return (
+                False,
+                f"Acceso denegado por Secreto Bancario (RBAC): intento de acceso a un cliente distinto "
+                f"a tu identificador autenticado (num_cte = {cliente_id})."
+            )
+
+        # Verificar que un OR de nivel superior en WHERE no anule el filtro num_cte = {cliente_id}
+        where_match = re.search(r"\bWHERE\b(.*?)(?:\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|\bHAVING\b|\Z)", branch, flags=re.DOTALL | re.IGNORECASE)
+        if not where_match:
+            return (
+                False,
+                f"Acceso denegado por Secreto Bancario (RBAC): falta cláusula WHERE con num_cte = {cliente_id}."
+            )
+
+        where_clause = where_match.group(1)
+        # Comprobar que num_cte = {cliente_id} esté realmente dentro del WHERE (y no solo en un JOIN opcional)
+        where_matches = re.findall(r"\b(?:[a-zA-Z_][a-zA-Z0-9_]*\.)?num_cte\s*=\s*(\d+)\b", where_clause, flags=re.IGNORECASE)
+        if not where_matches or any(int(m) != int(cliente_id) for m in where_matches):
+            return (
+                False,
+                f"Acceso denegado por Secreto Bancario (RBAC): la restricción num_cte = {cliente_id} "
+                f"debe aplicarse explícitamente en la cláusula WHERE."
+            )
+
+        # Detectar OR a nivel raíz (fuera de paréntesis) que podría ampliar filas fuera del cliente
+        depth = 0
+        top_level_chars = []
+        for ch in where_clause:
+            if ch == "(":
+                depth += 1
+                top_level_chars.append(" ")
+            elif ch == ")":
+                depth = max(0, depth - 1)
+                top_level_chars.append(" ")
+            elif depth == 0:
+                top_level_chars.append(ch)
+        top_level_where = "".join(top_level_chars)
+        if re.search(r"\bOR\b", top_level_where, flags=re.IGNORECASE):
+            return (
+                False,
+                f"Acceso denegado por Secreto Bancario (RBAC): no se permiten operadores OR sin paréntesis "
+                f"que puedan eludir la restricción num_cte = {cliente_id}."
+            )
+
+    return True, "OK"
 
 
 SQL_SYSTEM_PROMPT = """Eres el Especialista Técnico Text-to-SQL de la Plataforma de Datos de Banamex.
@@ -65,7 +239,7 @@ ARQUITECTURA DE DATOS Y CAPA SEMÁNTICA BANAMEX (Modelo Estrella Kimball)
 
 1. ESQUEMA DE DIMENSIONES (Contexto cualitativo, catálogo maestro):
    - `dim.dim_cliente` (5,000 registros):
-     * `num_cte` (INTEGER, PK): Identificador único del cliente.
+     * `num_cte` (INTEGER, PK): Identificador único del cliente (enteros del 1 al 5000).
      * `fec_alta` (DATE): Fecha de ingreso del cliente.
      * `fec_nac` (DATE): Fecha de nacimiento.
      * `tipo_persona` (VARCHAR(10)): 'PF' (Persona Física, 96%) o 'PM' (Persona Moral, 4%).
@@ -128,24 +302,69 @@ REGLAS DE NEGOCIO Y GOBERNANZA BANCARIA OBLIGATORIAS:
 """
 
 
-def run_sql_agent(instruction: str) -> dict:
+CLIENT_RBAC_ADDENDUM = """
+================================================================================
+POLÍTICA ESTRICTA DE SEGURIDAD Y SECRETO BANCARIO (ROL: CLIENTE FINAL)
+================================================================================
+El usuario está autenticado EXCLUSIVAMENTE como el cliente con identificador:
+    `num_cte = {cliente_id}`
+
+REGLAS INQUEBRANTABLES (ROW-LEVEL SECURITY):
+1. TODA consulta que acceda a `dim.dim_cliente`, `cfg.fact_sdos_captacoloca_m` o `cfg.fact_txn_captacoloca_d`
+   DEBE incluir OBLIGATORIAMENTE en su cláusula `WHERE` la condición exacta:
+       `num_cte = {cliente_id}`
+   (o calificada con el alias de la tabla, por ejemplo `c.num_cte = {cliente_id}` o `f.num_cte = {cliente_id}`).
+2. PROHIBIDO consultar datos de otros clientes, totales globales del banco, conteos de todos los clientes,
+   distribución general de hombres/mujeres/segmentos o la evolución del saldo global de la cartera.
+3. Si la solicitud pide información de otro `num_cte` o estadísticas globales de otros clientes,
+   NO generes ninguna consulta SQL y responde ÚNICAMENTE el texto exacto:
+       ACCESS_DENIED
+4. Únicamente las tablas de catálogo público (`dim.dim_producto` y `dim.dim_txn`) pueden consultarse
+   sin `num_cte` cuando el cliente pregunte por productos o tipos de transacciones que ofrece el banco.
+"""
+
+
+@traceable(run_type="chain", name="sql_agent_pipeline")
+def run_sql_agent(
+    instruction: str,
+    user_role: str = "universal",
+    cliente_id: Optional[int] = None,
+) -> dict:
     """
-    Ejecuta el pipeline Text-to-SQL con Gemini:
-    1. Envía la instrucción técnica y la capa semántica.
-    2. Extrae la consulta SQL limpia.
-    3. Ejecuta en PostgreSQL reto_banamex y retorna el resultado.
+    Ejecuta el pipeline Text-to-SQL con Gemini aplicando gobernanza RBAC:
+    1. Construye el prompt según el rol ('universal' o 'cliente').
+    2. Genera y extrae la consulta SQL limpia.
+    3. Valida la consulta de forma determinista con `validate_sql_for_role` antes de tocar PostgreSQL.
+    4. Ejecuta en PostgreSQL reto_banamex y retorna el resultado.
     """
+    role = (user_role or "universal").lower()
+
+    # Validación temprana de sesión para rol cliente
+    if role == "cliente" and cliente_id is None:
+        denial = "Acceso denegado por Gobernanza de Datos: sesión de cliente sin identificador `num_cte`."
+        return {
+            "sql_query": "BLOQUEADA (SIN CLIENTE_ID)",
+            "raw_result": None,
+            "summary": denial,
+            "error": "ACCESS_DENIED",
+        }
+
     # Fuera del try: un error de configuración es terminal y no debe convertirse en evidencia.
     llm = get_sql_llm()
     db = get_db_instance()
 
     try:
+        system_prompt = SQL_SYSTEM_PROMPT
+        if role == "cliente":
+            system_prompt += CLIENT_RBAC_ADDENDUM.format(cliente_id=cliente_id)
+
         user_message = f"Instrucción para generar SQL: {instruction}"
-        
-        # Invocar LLM
+        if role == "cliente":
+            user_message += f"\n(Recuerda: usuario autenticado exclusivamente como cliente num_cte = {cliente_id})."
+
         messages = [
-            SystemMessage(content=SQL_SYSTEM_PROMPT),
-            HumanMessage(content=user_message)
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_message),
         ]
         raw_response = llm.invoke(messages)
         content = raw_response.content
@@ -154,16 +373,42 @@ def run_sql_agent(instruction: str) -> dict:
         else:
             raw_text = str(content)
 
-        clean_sql = extract_clean_sql(raw_text)
+        # Capa 1: El modelo detectó violación de Secreto Bancario
+        if "ACCESS_DENIED" in raw_text.upper():
+            denial_msg = (
+                f"ACCESO DENEGADO (Política de Secreto Bancario y Gobernanza RBAC): "
+                f"Tu perfil de Cliente Final (num_cte = {cliente_id}) únicamente tiene autorización "
+                f"para consultar tus propios datos, cuentas, saldos y transacciones. No tienes permisos "
+                f"para acceder a métricas globales del banco ni a información de otros clientes."
+            )
+            return {
+                "sql_query": "BLOQUEADA POR POLÍTICA RBAC (ACCESS_DENIED)",
+                "raw_result": None,
+                "summary": denial_msg,
+                "error": "ACCESS_DENIED",
+            }
 
+        clean_sql = extract_clean_sql(raw_text)
         if not clean_sql:
             raise ValueError(f"No se pudo extraer SQL ejecutable de la respuesta: {raw_text}")
 
-        # Ejecución en PostgreSQL
+        # Capa 2: Validador determinista en Python antes de ejecutar en PostgreSQL
+        is_allowed, reason = validate_sql_for_role(clean_sql, role, cliente_id)
+        if not is_allowed:
+            return {
+                "sql_query": f"BLOQUEADA POR VALIDADOR RBAC:\n{clean_sql}",
+                "raw_result": None,
+                "summary": reason,
+                "error": "ACCESS_DENIED",
+            }
+
+        # Ejecución segura en PostgreSQL
         db_result = db.run(clean_sql)
 
         evidence_summary = (
-            f"Consulta SQL ejecutada:\n```sql\n{clean_sql}\n```\n\n"
+            f"Consulta SQL ejecutada (Rol: {role}"
+            + (f", num_cte={cliente_id}" if role == "cliente" else "")
+            + f"):\n```sql\n{clean_sql}\n```\n\n"
             f"Resultado crudo de la base de datos:\n{db_result}"
         )
 
@@ -171,7 +416,7 @@ def run_sql_agent(instruction: str) -> dict:
             "sql_query": clean_sql,
             "raw_result": db_result,
             "summary": evidence_summary,
-            "error": None
+            "error": None,
         }
 
     except Exception as e:
@@ -180,7 +425,7 @@ def run_sql_agent(instruction: str) -> dict:
             "sql_query": None,
             "raw_result": None,
             "summary": error_msg,
-            "error": str(e)
+            "error": str(e),
         }
     finally:
         db._engine.dispose()
@@ -189,15 +434,18 @@ def run_sql_agent(instruction: str) -> dict:
 def sql_agent_node(state: dict) -> dict:
     """
     Nodo de LangGraph para el agente de SQL.
-    Prioriza 'spoke_instruction' (la instrucción enriquecida del coordinador)
-    sobre 'question' (la pregunta cruda del usuario).
+    Lee `user_role` y `cliente_id` directamente del AgentState para aplicar
+    Row-Level Security y prioriza `spoke_instruction` sobre `question`.
     """
     instruction = state.get("spoke_instruction") or state.get("question", "")
-    result = run_sql_agent(instruction)
+    user_role = state.get("user_role") or "universal"
+    cliente_id = state.get("cliente_id")
+
+    result = run_sql_agent(instruction, user_role=user_role, cliente_id=cliente_id)
 
     msg_content = f"### [EVIDENCIA SQL - BASE DE DATOS BANAMEX]\n{result['summary']}"
 
     return {
         "evidences": {"sql_evidence": result},
-        "messages": [AIMessage(content=msg_content, name="sql_agent")]
+        "messages": [AIMessage(content=msg_content, name="sql_agent")],
     }

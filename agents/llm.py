@@ -32,10 +32,10 @@ def require_google_api_key() -> str:
     return api_key
 
 
-def get_gemini_llm(model: str | None = None) -> ChatGoogleGenerativeAI:
+def get_gemini_llm(model: str | None = None, temperature: float = 0.0) -> ChatGoogleGenerativeAI:
     """Construye el cliente de Gemini; lanza ConfigError si falta la API key."""
     return ChatGoogleGenerativeAI(
         model=model or DEFAULT_MODEL,
         google_api_key=require_google_api_key(),
-        temperature=0,
+        temperature=temperature,
     )

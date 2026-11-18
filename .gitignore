@@ -26,3 +26,6 @@ Thumbs.db
 data/reto_banamex_completo/
 data/*.sql
 *.sql
+
+# Generated charts
+outputs/charts/

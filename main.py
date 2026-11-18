@@ -2,100 +2,227 @@
 main.py
 
 Punto de entrada de prueba para la Plataforma Multi-Agente Hub-and-Spoke de Banamex.
-Ejecuta preguntas interactivas o de demostración mostrando la trazabilidad completa.
+Incluye selección de perfil RBAC (Usuario Universal vs. Cliente Final Banamex)
+y trazabilidad completa del Hub y los Spokes.
 """
 
+import os
 import sys
 if sys.stdout:
     sys.stdout.reconfigure(encoding="utf-8")
-import os
 from pathlib import Path
+from typing import Optional, Tuple
 from dotenv import load_dotenv
+
+# Cargar variables de entorno ANTES de importar LangGraph/LangChain para activar LangSmith desde el inicio
+load_dotenv(Path(__file__).parent / ".env")
 
 from langchain_core.messages import HumanMessage
 from workflow import multi_agent_app
+from agents.sql_agent import validate_cliente_id
 from logging_config import (
     log_header,
     log_coordinator_decision,
     log_sql_execution,
     log_rag_retrieval,
+    log_chart_generation,
     log_final_response,
 )
 
-load_dotenv(Path(__file__).parent / ".env")
 
+def ask_data_steward(
+    question: str,
+    thread_id: str = "demo_thread",
+    user_role: str = "universal",
+    cliente_id: Optional[int] = None,
+    auto_open_chart: bool = False,
+) -> dict:
+    """Ejecuta el grafo Hub-and-Spoke Multi-Hop trazando cada paso en consola y LangSmith."""
+    role_badge = "UNIVERSAL" if user_role == "universal" else f"CLIENTE num_cte={cliente_id}"
+    log_header(f"[{role_badge}] CONSULTA RECIBIDA: {question}")
 
-def ask_data_steward(question: str, thread_id: str = "demo_thread"):
-    """Ejecuta el grafo Hub-and-Spoke trazando cada paso en consola."""
-    log_header(f"CONSULTA RECIBIDA: {question}")
-
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "run_name": f"Banamex_Data_Steward [{role_badge}]",
+        "tags": [
+            f"role:{user_role}",
+            "hub-and-spoke",
+            "banamex-data-steward",
+        ],
+        "metadata": {
+            "user_role": user_role,
+            "cliente_id": cliente_id,
+            "thread_id": thread_id,
+        },
+    }
     initial_input = {
         "messages": [HumanMessage(content=question)],
         "question": question,
+        "user_role": user_role,
+        "cliente_id": cliente_id,
         "plan": None,
         "next_agent": None,
+        "spoke_instruction": None,
         "evidences": {},
-        "final_answer": None
+        "chart_path": None,
+        "step_count": 0,
+        "final_answer": None,
     }
 
-    final_state = None
+    final_answer = None
+    chart_path = None
     for event in multi_agent_app.stream(initial_input, config=config, stream_mode="updates"):
         for node_name, update in event.items():
             if node_name == "coordinator":
                 if update.get("plan") and update.get("next_agent"):
                     log_coordinator_decision(update["plan"], update["next_agent"])
                 if update.get("final_answer"):
-                    final_state = update
+                    final_answer = update["final_answer"]
+                if update.get("chart_path"):
+                    chart_path = update["chart_path"]
             elif node_name == "sql_agent":
                 ev = update.get("evidences", {}).get("sql_evidence", {})
                 log_sql_execution(ev.get("sql_query", "N/A"), ev.get("summary", "N/A"))
             elif node_name == "rag_agent":
                 ev = update.get("evidences", {}).get("rag_evidence", {})
                 log_rag_retrieval(question, ev.get("summary", "N/A"))
+            elif node_name == "chart_tool":
+                ev = update.get("evidences", {}).get("chart_evidence", {})
+                if update.get("chart_path"):
+                    chart_path = update["chart_path"]
+                log_chart_generation(
+                    ev.get("title", "Gráfica Banamex"),
+                    ev.get("chart_type", "N/A"),
+                    ev.get("chart_path") or "N/A",
+                    ev.get("summary", "N/A"),
+                )
 
-    if final_state and final_state.get("final_answer"):
-        log_final_response(final_state["final_answer"])
+    if final_answer:
+        log_final_response(final_answer, chart_path=chart_path)
+
+    if auto_open_chart and chart_path and Path(chart_path).exists():
+        try:
+            os.startfile(chart_path)
+        except Exception:
+            pass
+
+    return {"final_answer": final_answer, "chart_path": chart_path}
+
+
+def authenticate_user() -> Tuple[str, Optional[int]]:
+    """
+    Flujo de selección de perfil en consola (sin contraseña por el momento):
+      - Opción 1: Usuario Universal (acceso analítico completo a SQL y RAG).
+      - Opción 2: Cliente Banamex (solicita y valida `num_cte` real en PostgreSQL).
+    """
+    print("\n" + "=" * 80)
+    print(" AUTENTICACIÓN DE PERFIL - BANAMEX DATA STEWARD (RBAC)")
+    print("=" * 80)
+    print(" Selecciona tu tipo de usuario:")
+    print("   [1] Usuario Universal  (Data Steward — acceso total a SQL y documentación)")
+    print("   [2] Cliente Banamex    (Cliente final — acceso exclusivo a tu num_cte)")
+    print("=" * 80)
+
+    while True:
+        choice = input("\nElige una opción (1 o 2): ").strip().lower()
+        if choice in ("1", "opcion 1", "opción 1", "universal"):
+            print("\n✔ Sesión iniciada como: USUARIO UNIVERSAL (acceso completo).")
+            return "universal", None
+
+        if choice in ("2", "opcion 2", "opción 2", "cliente"):
+            print("\nIngresa tu identificador de cliente (`num_cte` en base de datos: entero del 1 al 5000).")
+            print("Ejemplos válidos: 1 (PF PREMIUM), 5 (PF PREFERENTE), 50 (PF MASIVO), 3000 (PF MUJER), 5000 (PM)")
+            while True:
+                raw_id = input("ID de cliente (num_cte) [o 'volver']: ").strip()
+                if raw_id.lower() in ("volver", "atras", "atrás"):
+                    break
+
+                is_valid, cid, profile = validate_cliente_id(raw_id)
+                if is_valid and cid is not None and profile is not None:
+                    print(
+                        f"\n✔ Sesión iniciada como: CLIENTE BANAMEX (num_cte = {cid} | "
+                        f"{profile['tipo_persona']} | {profile['genero_cte']} | "
+                        f"Segmento: {profile['segmento_cte']})."
+                    )
+                    return "cliente", cid
+
+                print("✖ ID inválido. Debe ser un número entero registrado en dim.dim_cliente (1 a 5000). Intenta de nuevo.")
+            continue
+
+        print("✖ Opción inválida. Escribe 1 (Usuario Universal) o 2 (Cliente Banamex).")
 
 
 def run_demo():
-    """Ejecuta una batería de pruebas demostrativas cubriendo SQL y RAG oficial."""
-    demo_questions = [
-        # Prueba 1: SQL Agent (PostgreSQL + Gemini)
-        "¿Cuántos clientes tenemos registrados en el segmento PREMIUM?",
-        
-        # Prueba 2: RAG Tool (Pinecone + bge-large + Documentación Oficial)
-        "¿Cuáles son las comisiones y costos de anualidad de la tarjeta Costco Banamex?",
-        
-        # Prueba 3: Blindaje de Dominio (Pregunta fuera de contexto Banamex)
-        "¿Quién ganó el partido de fútbol de ayer en la noche?"
-    ]
-
+    """Ejecuta una batería de pruebas demostrativas cubriendo Universal, Cliente y RBAC."""
     print("\n" + "=" * 80)
-    print(" INICIANDO PRUEBAS DEMOSTRATIVAS - PLATAFORMA MULTI-AGENTE BANAMEX")
+    print(" INICIANDO PRUEBAS DEMOSTRATIVAS - PLATAFORMA MULTI-AGENTE BANAMEX (RBAC)")
     print("=" * 80)
 
-    for i, q in enumerate(demo_questions, 1):
-        ask_data_steward(q, thread_id=f"demo_session_{i}")
+    # Prueba 1: Usuario Universal -> acceso total SQL
+    ask_data_steward(
+        "¿Cuántos clientes tenemos registrados en el segmento PREMIUM?",
+        thread_id="demo_universal_1",
+        user_role="universal",
+        cliente_id=None,
+    )
+
+    # Prueba 2: Cliente Final (num_cte = 1) -> consulta permitida de sus propios saldos
+    ask_data_steward(
+        "¿Cuál es mi saldo actual por producto?",
+        thread_id="demo_cliente_1",
+        user_role="cliente",
+        cliente_id=1,
+    )
+
+    # Prueba 3: Cliente Final (num_cte = 1) -> intento bloqueado de ver datos globales
+    ask_data_steward(
+        "¿Cuántos clientes en total tiene el banco y cuál es el saldo del cliente 5?",
+        thread_id="demo_cliente_1_rbac",
+        user_role="cliente",
+        cliente_id=1,
+    )
+
+    # Prueba 4: Multi-Hop (Orquestador -> SQL -> Orquestador -> Chart Tool -> Orquestador)
+    ask_data_steward(
+        "Dame una gráfica del crecimiento mensual de los saldos de las cuentas de los clientes.",
+        thread_id="demo_universal_chart",
+        user_role="universal",
+        cliente_id=None,
+        auto_open_chart=False,
+    )
 
 
 def run_interactive():
-    """Modo interactivo en terminal para hacer cualquier pregunta."""
+    """Modo interactivo en terminal con autenticación RBAC inicial."""
+    user_role, cliente_id = authenticate_user()
+    thread_id = "interactive_universal" if user_role == "universal" else f"interactive_cliente_{cliente_id}"
+    prompt_label = "[Universal]" if user_role == "universal" else f"[Cliente #{cliente_id}]"
+
     print("\n" + "=" * 80)
     print(" BANAMEX DATA STEWARD - CONSOLA INTERACTIVA (HUB-AND-SPOKE)")
-    print(" Escribe tu consulta o 'salir' para terminar.")
+    print(" Escribe tu consulta, 'cambiar' para cambiar de usuario, o 'salir' para terminar.")
     print("=" * 80)
 
-    thread_id = "interactive_user_session"
     while True:
         try:
-            q = input("\n[Usuario] > ").strip()
+            q = input(f"\n{prompt_label} > ").strip()
             if not q:
                 continue
             if q.lower() in ["salir", "exit", "quit"]:
                 print("\nCerrando sesión del Data Steward. ¡Hasta pronto!")
                 break
-            ask_data_steward(q, thread_id=thread_id)
+            if q.lower() in ["cambiar", "logout", "switch"]:
+                user_role, cliente_id = authenticate_user()
+                thread_id = "interactive_universal" if user_role == "universal" else f"interactive_cliente_{cliente_id}"
+                prompt_label = "[Universal]" if user_role == "universal" else f"[Cliente #{cliente_id}]"
+                continue
+            ask_data_steward(
+                q,
+                thread_id=thread_id,
+                user_role=user_role,
+                cliente_id=cliente_id,
+                auto_open_chart=True,
+            )
         except KeyboardInterrupt:
             print("\nOperación cancelada por el usuario.")
             break
