@@ -1,113 +1,118 @@
 """
 agents/ocr_agent.py
 
-Spoke de OCR para documentos cargados por el usuario.
-Flujo:  archivo(s) -> extracción de texto por página -> canal 'uploaded_documents' del estado -> RAG Agent
-NO escribe en Pinecone: el texto extraído viaja en el estado del grafo y el RAG Agent lo usa
-directamente como contexto (junto con lo que recupere del corpus oficial).
+Spoke de OCR LOCAL para documentos cargados por el usuario.
+Flujo:  archivo(s) -> extracción de texto por página (en la máquina local) -> canal 'uploaded_documents' -> RAG Agent
+Los archivos NUNCA salen de la máquina: no se envían a Gemini ni se escriben en Pinecone.
+Solo el texto extraído llega después al RAG Agent como contexto.
 
-Estrategia de extracción (híbrida, para ahorrar llamadas al LLM):
+Estrategia de extracción (híbrida):
 - PDF digital: se usa el texto nativo de pypdf si la página tiene al menos OCR_MIN_CHARS caracteres.
-- PDF escaneado / páginas con poco texto / imágenes: OCR multimodal con Google Gemini (OCR_MODEL).
+- PDF escaneado / páginas con poco texto: la página se renderiza a imagen con pypdfium2 (OCR_DPI)
+  y se procesa con Tesseract (OCR_LANG, por defecto 'spa+eng').
+- Imágenes (PNG/JPG/WEBP/TIFF): Tesseract directamente.
 - TXT / MD: lectura directa.
-Con OCR_FORCE=true todas las páginas PDF pasan por Gemini.
+Con OCR_FORCE=true todas las páginas PDF pasan por Tesseract.
+
+Requisito del sistema: el binario de Tesseract con el idioma español.
+  macOS:   brew install tesseract tesseract-lang
+  Windows: instalador de UB Mannheim (marcar 'Spanish'); si no está en el PATH, definir TESSERACT_CMD.
+  Linux:   apt install tesseract-ocr tesseract-ocr-spa
 """
 
 import os
-import io
-import base64
-import mimetypes
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
-from pypdf import PdfReader, PdfWriter
-from langchain_core.messages import AIMessage, HumanMessage
-
-from agents.llm import get_gemini_llm
+import pypdfium2 as pdfium
+import pytesseract
+from PIL import Image, ImageOps
+from pypdf import PdfReader
+from langchain_core.messages import AIMessage
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-OCR_MODEL = os.environ.get("OCR_MODEL") or os.environ.get("COORDINATOR_MODEL", "gemini-3.5-flash")
+OCR_LANG = os.environ.get("OCR_LANG", "spa+eng")
+OCR_DPI = int(os.environ.get("OCR_DPI", "300"))
 OCR_MIN_CHARS = int(os.environ.get("OCR_MIN_CHARS", "80"))
 OCR_FORCE = os.environ.get("OCR_FORCE", "false").strip().lower() in ("1", "true", "yes", "si", "sí")
-OCR_MAX_WORKERS = 4
+OCR_MAX_WORKERS = max(1, min(4, os.cpu_count() or 1))
+TESSERACT_CMD = os.environ.get("TESSERACT_CMD")
+if TESSERACT_CMD:
+    pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
 PDF_EXTENSIONS = {".pdf"}
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"}
 TEXT_EXTENSIONS = {".txt", ".md"}
 SUPPORTED_EXTENSIONS = PDF_EXTENSIONS | IMAGE_EXTENSIONS | TEXT_EXTENSIONS
 
-OCR_PROMPT = """Eres un motor de OCR de alta precisión para documentos bancarios de Banamex.
-Transcribe TODO el texto visible del documento adjunto, en su idioma original y en orden de lectura.
-Reglas:
-1. No resumas, no traduzcas, no corrijas ni inventes contenido. Si una palabra es ilegible escribe [ilegible].
-2. Conserva montos, porcentajes, fechas, números de cuenta/cláusula y nombres EXACTAMENTE como aparecen.
-3. Representa las tablas en formato Markdown y conserva los encabezados y la jerarquía de secciones.
-4. Responde únicamente con la transcripción, sin comentarios antes ni después.
-5. Si el documento no contiene texto, responde exactamente: [SIN TEXTO]
-"""
 
-
-def get_ocr_llm():
-    """Retorna Gemini. Lanza ConfigError (error terminal) si falta GOOGLE_API_KEY."""
-    return get_gemini_llm(OCR_MODEL)
-
-
-def _response_text(response) -> str:
-    content = response.content if hasattr(response, "content") else response
-    if isinstance(content, list):
-        return "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in content)
-    return str(content)
+def check_tesseract() -> None:
+    """Verifica que Tesseract y los idiomas de OCR_LANG estén instalados; lanza RuntimeError con instrucciones si no."""
+    try:
+        available = set(pytesseract.get_languages(config=""))
+    except pytesseract.TesseractNotFoundError:
+        raise RuntimeError(
+            "Tesseract no está instalado o no está en el PATH. Instálalo (macOS: 'brew install tesseract "
+            "tesseract-lang') o define TESSERACT_CMD en el .env con la ruta al ejecutable."
+        )
+    missing = [lang for lang in OCR_LANG.split("+") if lang not in available]
+    if missing:
+        raise RuntimeError(
+            f"Faltan idiomas de Tesseract: {', '.join(missing)} (instalados: {', '.join(sorted(available))}). "
+            "macOS: 'brew install tesseract-lang'; Linux: 'apt install tesseract-ocr-spa'."
+        )
 
 
 # ==============================================================================
-# EXTRACCIÓN DE TEXTO
+# EXTRACCIÓN DE TEXTO (100% LOCAL)
 # ==============================================================================
 
-def ocr_with_gemini(llm, data: bytes, mime_type: str) -> str:
-    """Envía un archivo (imagen o PDF de una página) a Gemini y regresa la transcripción."""
-    block_type = "image" if mime_type.startswith("image/") else "file"
-    message = HumanMessage(content=[
-        {"type": "text", "text": OCR_PROMPT},
-        {"type": block_type, "base64": base64.b64encode(data).decode("ascii"), "mime_type": mime_type},
-    ])
-    text = _response_text(llm.invoke([message])).strip()
-    return "" if text == "[SIN TEXTO]" else text
+def ocr_image(image: Image.Image) -> str:
+    """Aplica Tesseract a una imagen. Escala de grises mejora la precisión en escaneos."""
+    gray = ImageOps.grayscale(image)
+    return pytesseract.image_to_string(gray, lang=OCR_LANG).strip()
 
 
-def _single_page_pdf(reader: PdfReader, page_idx: int) -> bytes:
-    writer = PdfWriter()
-    writer.add_page(reader.pages[page_idx])
-    buffer = io.BytesIO()
-    writer.write(buffer)
-    return buffer.getvalue()
-
-
-def extract_pdf_pages(llm, path: Path) -> list[dict]:
-    """Extrae el texto de cada página; usa OCR con Gemini solo cuando el texto nativo es insuficiente."""
+def extract_pdf_pages(path: Path) -> list[dict]:
+    """Extrae el texto de cada página; usa Tesseract solo cuando el texto nativo es insuficiente."""
     reader = PdfReader(path)
+    pdf = pdfium.PdfDocument(path)
+    try:
+        pages: list[dict] = []
+        pending: list[tuple[int, str]] = []  # (índice, texto nativo) de las páginas que requieren OCR
+        for idx, page in enumerate(reader.pages):
+            native = (page.extract_text() or "").strip()
+            if not OCR_FORCE and len(native) >= OCR_MIN_CHARS:
+                pages.append({"page": idx + 1, "text": native, "method": "texto_nativo"})
+            else:
+                pages.append(None)
+                pending.append((idx, native))
 
-    def process(page_idx: int) -> dict:
-        native = (reader.pages[page_idx].extract_text() or "").strip()
-        if not OCR_FORCE and len(native) >= OCR_MIN_CHARS:
-            return {"page": page_idx + 1, "text": native, "method": "texto_nativo"}
-        ocr_text = ocr_with_gemini(llm, _single_page_pdf(reader, page_idx), "application/pdf")
-        # Si el OCR no devuelve nada, se conserva el poco texto nativo que hubiera.
-        return {"page": page_idx + 1, "text": ocr_text or native, "method": "ocr_gemini"}
+        # pypdfium2 no es thread-safe: se renderiza en este hilo y solo Tesseract corre en paralelo.
+        # Se procesa por lotes para no tener todas las imágenes de un PDF grande en memoria a la vez.
+        with ThreadPoolExecutor(max_workers=OCR_MAX_WORKERS) as executor:
+            for start in range(0, len(pending), OCR_MAX_WORKERS):
+                batch = pending[start:start + OCR_MAX_WORKERS]
+                images = [pdf[idx].render(scale=OCR_DPI / 72).to_pil() for idx, _ in batch]
+                for (idx, native), text in zip(batch, executor.map(ocr_image, images)):
+                    # Si el OCR no devuelve nada, se conserva el poco texto nativo que hubiera.
+                    pages[idx] = {"page": idx + 1, "text": text or native, "method": "ocr_tesseract"}
+        return pages
+    finally:
+        pdf.close()
 
-    with ThreadPoolExecutor(max_workers=OCR_MAX_WORKERS) as executor:
-        return list(executor.map(process, range(len(reader.pages))))
 
-
-def extract_file_pages(llm, path: Path) -> list[dict]:
+def extract_file_pages(path: Path) -> list[dict]:
     """Devuelve [{page, text, method}] según el tipo de archivo."""
     ext = path.suffix.lower()
     if ext in PDF_EXTENSIONS:
-        return extract_pdf_pages(llm, path)
+        return extract_pdf_pages(path)
     if ext in IMAGE_EXTENSIONS:
-        mime_type = mimetypes.guess_type(path.name)[0] or "image/png"
-        return [{"page": 1, "text": ocr_with_gemini(llm, path.read_bytes(), mime_type), "method": "ocr_gemini"}]
+        with Image.open(path) as img:
+            image = ImageOps.exif_transpose(img)  # respeta la orientación de fotos tomadas con celular
+            return [{"page": 1, "text": ocr_image(image), "method": "ocr_tesseract"}]
     if ext in TEXT_EXTENSIONS:
         return [{"page": 1, "text": path.read_text(encoding="utf-8", errors="replace").strip(), "method": "texto_plano"}]
     raise ValueError(f"Formato no soportado '{ext}'. Formatos válidos: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
@@ -119,24 +124,31 @@ def extract_file_pages(llm, path: Path) -> list[dict]:
 
 def run_ocr_agent(file_paths: list[str]) -> dict:
     """Extrae el texto de los archivos cargados. Regresa la evidencia y los documentos extraídos."""
-    # Fuera del try: un error de configuración es terminal y no debe convertirse en evidencia.
-    llm = get_ocr_llm()
-
     documents: dict[str, dict] = {}
     files_report: list[dict] = []
     errors: list[str] = []
+
+    needs_ocr = any(Path(p).suffix.lower() in PDF_EXTENSIONS | IMAGE_EXTENSIONS for p in file_paths)
+    if needs_ocr:
+        try:
+            check_tesseract()
+        except RuntimeError as e:
+            return {
+                "evidence": {"files": [], "extracted_sources": [], "summary": f"Error en OCR Agent: {e}", "error": str(e)},
+                "documents": {},
+            }
 
     for raw_path in file_paths:
         path = Path(raw_path).expanduser()
         try:
             if not path.is_file():
                 raise FileNotFoundError(f"No existe el archivo '{path}'")
-            pages = extract_file_pages(llm, path)
+            pages = extract_file_pages(path)
             pages_with_text = [p for p in pages if p["text"]]
             files_report.append({
                 "source": path.name,
                 "pages": len(pages),
-                "ocr_pages": sum(1 for p in pages if p["method"] == "ocr_gemini"),
+                "ocr_pages": sum(1 for p in pages if p["method"] == "ocr_tesseract"),
                 "empty_pages": len(pages) - len(pages_with_text),
                 "chars": sum(len(p["text"]) for p in pages_with_text),
             })
@@ -150,7 +162,7 @@ def run_ocr_agent(file_paths: list[str]) -> dict:
     lines = [f"Archivos procesados: {len(files_report)}/{len(file_paths)}."]
     for f in files_report:
         lines.append(
-            f"- {f['source']}: {f['pages']} pág. ({f['ocr_pages']} con OCR Gemini, "
+            f"- {f['source']}: {f['pages']} pág. ({f['ocr_pages']} con OCR local Tesseract, "
             f"{f['empty_pages']} sin texto), {f['chars']:,} caracteres extraídos."
         )
     if errors:
@@ -168,7 +180,7 @@ def run_ocr_agent(file_paths: list[str]) -> dict:
 
 
 def ocr_agent_node(state: dict) -> dict:
-    """Nodo de LangGraph para el agente OCR de documentos cargados."""
+    """Nodo de LangGraph para el agente OCR local de documentos cargados."""
     result = run_ocr_agent(state.get("uploaded_files") or [])
     evidence = result["evidence"]
 
