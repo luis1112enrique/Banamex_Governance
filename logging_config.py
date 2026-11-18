@@ -42,6 +42,11 @@ def log_web_search(query: str, result_summary: str):
     console.print(Panel(content, title="Spoke: Web Search Agent (Tavily API)", border_style="magenta"))
 
 
+def log_ocr_extraction(files: list, result_summary: str):
+    content = f"[bold cyan]Archivos cargados:[/bold cyan] {', '.join(files) or 'N/A'}\n\n[bold cyan]Resultado de la ingesta:[/bold cyan]\n{result_summary}"
+    console.print(Panel(content, title="Spoke: OCR Agent (Gemini OCR)", border_style="cyan"))
+
+
 def log_final_response(answer: str):
     console.print()
     console.print(Panel(answer, title="Respuesta Final - Data Steward Banamex", border_style="bold bright_green"))

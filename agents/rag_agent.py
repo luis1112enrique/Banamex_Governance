@@ -24,6 +24,7 @@ PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
 INDEX_NAME = os.environ.get("INDEX_NAME", "banamex-governance")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "bge-large")
 COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", "gemini-3.5-flash")
+MAX_UPLOADED_CHARS = 300_000  # tope de texto de documentos cargados que se envía al LLM
 
 
 def get_vector_store() -> PineconeVectorStore:
@@ -39,26 +40,53 @@ def get_rag_llm():
     return get_gemini_llm(COORDINATOR_MODEL)
 
 
-def run_rag_agent(question: str) -> dict:
+def format_uploaded_documents(uploaded_documents: dict | None) -> list[str]:
+    """Convierte el texto extraído por el OCR Agent (canal 'uploaded_documents') en bloques de contexto.
+    Recorta al llegar a MAX_UPLOADED_CHARS para no exceder el contexto del modelo."""
+    blocks, used = [], 0
+    for source, doc in (uploaded_documents or {}).items():
+        for p in doc.get("pages", []):
+            text = p["text"].strip()
+            if used + len(text) > MAX_UPLOADED_CHARS:
+                blocks.append(f"[Documento cargado | Fuente: {source}] (texto restante omitido por longitud)")
+                return blocks
+            used += len(text)
+            blocks.append(
+                f"[Documento cargado | Fuente: {source} (Pág. {p['page']} de {doc.get('total_pages', '?')}, "
+                f"Tipo: documento_cargado, Extracción: {p.get('method', 'ocr')})]\n{text}"
+            )
+    return blocks
+
+
+def run_rag_agent(question: str, uploaded_documents: dict | None = None) -> dict:
     """
     Recupera contexto de Pinecone y genera una respuesta fundamentada con Gemini 3.5 Flash.
+    Si hay 'uploaded_documents' (texto extraído por el OCR Agent), se agregan al contexto
+    directamente; no se buscan ni se guardan en Pinecone.
     """
     # Fuera del try: un error de configuración es terminal y no debe convertirse en evidencia.
     llm = get_rag_llm()
 
     try:
-        vector_store = get_vector_store()
-        retriever = vector_store.as_retriever(search_kwargs={"k": 4})
-        docs = retriever.invoke(question)
+        uploaded_blocks = format_uploaded_documents(uploaded_documents)
 
-        if not docs:
+        try:
+            docs = get_vector_store().as_retriever(search_kwargs={"k": 4}).invoke(question)
+        except Exception as e:
+            # Con documentos cargados aún se puede responder aunque Pinecone/Ollama no estén disponibles.
+            if not uploaded_blocks:
+                raise
+            docs = []
+            uploaded_blocks.append(f"[Aviso: no se pudo consultar el corpus oficial en Pinecone: {e}]")
+
+        if not docs and not uploaded_blocks:
             return {
                 "retrieved_docs": [],
                 "summary": "No se encontró evidencia relevante en la documentación oficial de Banamex.",
                 "error": None
             }
 
-        context_blocks = []
+        context_blocks = list(uploaded_blocks)
         for i, d in enumerate(docs, 1):
             source = d.metadata.get("source", "documento_banamex")
             page = d.metadata.get("page", 1)
@@ -85,6 +113,7 @@ Si la información no se encuentra en el texto proporcionado, indícalo claramen
 1. Precisión y Citas: Cita el nombre del documento oficial (ej. anexo_costco.pdf, contrato_cuenta_base.pdf), numerales, comisiones exactas en pesos o porcentajes y páginas.
 2. Si se trata de comisiones o costos, sé muy específico sobre montos sin IVA, anualidades o penalizaciones.
 3. Mantén un tono formal, bancario, transparente y verificado.
+4. Los bloques marcados como 'Documento cargado' provienen de un archivo subido por el usuario (procesado con OCR), no del corpus oficial: indícalo al citarlo. Si la pregunta es sobre ese archivo, prioriza su contenido y usa los fragmentos oficiales solo para contrastar o complementar.
 """
         )
 
@@ -113,7 +142,8 @@ Si la información no se encuentra en el texto proporcionado, indícalo claramen
 def rag_agent_node(state: dict) -> dict:
     """Nodo de LangGraph para el agente RAG normativo."""
     instruction = state.get("spoke_instruction") or state.get("question", "")
-    result = run_rag_agent(instruction)
+    # Texto de los documentos cargados en este hilo (extraído por el OCR Agent, no indexado en Pinecone).
+    result = run_rag_agent(instruction, uploaded_documents=state.get("uploaded_documents"))
 
     msg_content = f"### [EVIDENCIA RAG - DOCUMENTACIÓN OFICIAL BANAMEX]\n{result['summary']}"
 

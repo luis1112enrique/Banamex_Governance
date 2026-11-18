@@ -5,7 +5,7 @@ Definición del estado global (AgentState) para la arquitectura Hub-and-Spoke.
 Mantiene el historial de mensajes, la traza de ruteo del supervisor y las evidencias.
 """
 
-from typing import Annotated, Sequence, TypedDict, Dict, Any, Optional
+from typing import Annotated, Sequence, TypedDict, Dict, Any, Optional, List
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
@@ -18,6 +18,13 @@ def merge_evidences(existing: Dict[str, Any], new_evidence: Dict[str, Any]) -> D
     updated = dict(existing or {})
     if new_evidence:
         updated.update(new_evidence)
+    return updated
+
+
+def merge_documents(existing: Dict[str, Any], new_docs: Dict[str, Any]) -> Dict[str, Any]:
+    """Acumula los documentos cargados en el hilo; un archivo con el mismo nombre reemplaza al anterior."""
+    updated = dict(existing or {})
+    updated.update(new_docs or {})
     return updated
 
 
@@ -52,7 +59,17 @@ class AgentState(TypedDict):
     # Almacén de evidencias recopiladas por los agentes especializados durante el turno
     # Annotated: Etiquetar o anotar para adjuntar funcion especial (merge_evidences).
     evidences: Annotated[Dict[str, Any], merge_evidences]
-    
+
+    # Rutas de archivos cargados por el usuario en este turno. Si hay archivos, el grafo pasa
+    # primero por el OCR Agent (extrae el texto) y luego por el RAG Agent.
+    # main.py lo reinicia en cada turno y el OCR Agent lo vacía al consumirlo.
+    uploaded_files: Optional[List[str]]
+
+    # Texto extraído por el OCR Agent: {nombre_archivo: {"total_pages": int, "pages": [{page, text, method}]}}.
+    # No se indexa en Pinecone; el RAG Agent lo usa directamente como contexto. Persiste en el hilo
+    # (checkpointer) para preguntas de seguimiento; volver a subir un archivo con el mismo nombre lo reemplaza.
+    uploaded_documents: Annotated[Dict[str, Any], merge_documents]
+
     # Respuesta final formulada y validada por el Data Steward
     final_answer: Optional[str]
 

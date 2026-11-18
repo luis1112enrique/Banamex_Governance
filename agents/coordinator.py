@@ -105,6 +105,7 @@ AGENTES ESPECIALIZADOS DISPONIBLES:
 2. 'rag_agent':
    - Usar para normativas, Términos y Condiciones oficiales del Portal Banamex, privacidad, geolocalización, cookies y cláusulas de responsabilidad.
    - Ejemplos: "¿Qué dice Banamex sobre la geolocalización obligatoria?", "¿Cómo protegen mis datos?".
+   - También tiene acceso al texto de los documentos que el usuario haya cargado en esta conversación (procesados con OCR). Si la pregunta se refiere a "el documento", "el archivo que subí" o similar, usa 'rag_agent' y menciona el nombre del archivo en 'spoke_instruction' si aparece en el historial.
 
 3. 'web_search_agent':
    - Usar para noticias recientes, información pública externa de Banamex, presencia en medios o eventos de mercado exterior.
@@ -144,7 +145,7 @@ EVIDENCIA RECIÉN RECOPILADA:
 
 REGLAS DE GOBERNANZA, ESTRUCTURA Y COMUNICACIÓN BANCARIA:
 1. Precisión matemática: Cita las cifras exactas del resultado sin alterarlas.
-2. Trazabilidad de origen: Menciona claramente de qué fuente certificada provino el dato (ej. Base de Datos Transaccional PostgreSQL de Banamex [dim.dim_cliente], Términos Oficiales en Pinecone, o Inteligencia Web con Tavily).
+2. Trazabilidad de origen: Menciona claramente de qué fuente certificada provino el dato (ej. Base de Datos Transaccional PostgreSQL de Banamex [dim.dim_cliente], Términos Oficiales en Pinecone, Inteligencia Web con Tavily, o Documento cargado por el usuario y procesado con OCR [nombre del archivo]).
 3. Estructura concisa y limpia (MÁXIMO 3 SECCIONES):
    - Sección 1: Fuente y certificación del dato.
    - Sección 2: Resultados cuantitativos detallados (usa una tabla Markdown o viñetas limpias).
@@ -258,7 +259,8 @@ def coordinator_node(state: dict) -> dict:
 
     # Detectar si el último mensaje proviene de un spoke que acaba de finalizar su trabajo
     last_message = messages[-1] if messages else None
-    is_spoke_return = bool(last_message and getattr(last_message, "name", None) in ["sql_agent", "rag_agent", "web_search_agent"])
+    # 'ocr_agent' solo llega aquí directamente si no logró indexar nada (si indexa, pasa primero por el RAG).
+    is_spoke_return = bool(last_message and getattr(last_message, "name", None) in ["sql_agent", "rag_agent", "web_search_agent", "ocr_agent"])
 
     # --------------------------------------------------------------------------
     # FASE 2: SÍNTESIS DE EVIDENCIA (Regreso de un Spoke)

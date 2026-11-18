@@ -9,6 +9,7 @@ import sys
 if sys.stdout:
     sys.stdout.reconfigure(encoding="utf-8")
 import os
+import shlex
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -21,6 +22,7 @@ from logging_config import (
     log_sql_execution,
     log_rag_retrieval,
     log_web_search,
+    log_ocr_extraction,
     log_final_response,
     log_fatal_error,
 )
@@ -28,8 +30,16 @@ from logging_config import (
 load_dotenv(Path(__file__).parent / ".env")
 
 
-def ask_data_steward(question: str, thread_id: str = "demo_thread"):
-    """Ejecuta el grafo Hub-and-Spoke trazando cada paso en consola."""
+DEFAULT_UPLOAD_QUESTION = "Resume el contenido principal del documento cargado y sus datos más relevantes."
+
+
+def ask_data_steward(question: str, thread_id: str = "demo_thread", files: list[str] | None = None):
+    """Ejecuta el grafo Hub-and-Spoke trazando cada paso en consola.
+    Si se pasan 'files', el turno entra por el OCR Agent, que extrae el texto y se lo pasa al RAG."""
+    files = [str(Path(f).expanduser().resolve()) for f in (files or [])]
+    if files:
+        file_names = ", ".join(Path(f).name for f in files)
+        question = f"{question or DEFAULT_UPLOAD_QUESTION} (Documento(s) cargado(s): {file_names})"
     log_header(f"CONSULTA RECIBIDA: {question}")
 
     config = {"configurable": {"thread_id": thread_id}}
@@ -38,7 +48,9 @@ def ask_data_steward(question: str, thread_id: str = "demo_thread"):
         "question": question,
         "plan": None,
         "next_agent": None,
+        "spoke_instruction": None,
         "evidences": {},
+        "uploaded_files": files,
         "final_answer": None
     }
 
@@ -60,6 +72,9 @@ def ask_data_steward(question: str, thread_id: str = "demo_thread"):
             elif node_name == "web_search_agent":
                 ev = update.get("evidences", {}).get("web_evidence", {})
                 log_web_search(question, ev.get("summary", "N/A"))
+            elif node_name == "ocr_agent":
+                ev = update.get("evidences", {}).get("ocr_evidence", {})
+                log_ocr_extraction([Path(f).name for f in files], ev.get("summary", "N/A"))
 
     if final_state and final_state.get("final_answer"):
         log_final_response(final_state["final_answer"])
@@ -91,6 +106,7 @@ def run_interactive():
     print("\n" + "=" * 80)
     print(" BANAMEX DATA STEWARD - CONSOLA INTERACTIVA (HUB-AND-SPOKE)")
     print(" Escribe tu consulta o 'salir' para terminar.")
+    print(" Para cargar documentos (OCR -> RAG): /subir <ruta> [<ruta2> ...]  (usa comillas si la ruta tiene espacios)")
     print("=" * 80)
 
     thread_id = "interactive_user_session"
@@ -102,6 +118,22 @@ def run_interactive():
             if q.lower() in ["salir", "exit", "quit"]:
                 print("Finalizando sesión...")
                 break
+            if q.lower().startswith("/subir"):
+                try:
+                    paths = shlex.split(q[len("/subir"):])
+                except ValueError as e:
+                    print(f"Ruta inválida: {e}")
+                    continue
+                if not paths:
+                    print("Uso: /subir <ruta> [<ruta2> ...]")
+                    continue
+                missing = [p for p in paths if not Path(p).expanduser().is_file()]
+                if missing:
+                    print(f"No se encontraron los archivos: {', '.join(missing)}")
+                    continue
+                pregunta = input("[Pregunta sobre el documento, Enter para resumen] > ").strip()
+                ask_data_steward(pregunta, thread_id=thread_id, files=paths)
+                continue
             ask_data_steward(q, thread_id=thread_id)
         except (KeyboardInterrupt, EOFError):
             print("\nSesión terminada.")
@@ -114,6 +146,18 @@ if __name__ == "__main__":
         require_google_api_key()
         if len(sys.argv) > 1 and sys.argv[1] == "--interactive":
             run_interactive()
+        elif len(sys.argv) > 1 and sys.argv[1] == "--ocr":
+            # uv run python main.py --ocr archivo1.pdf [archivo2.png ...] [--pregunta "..."]
+            args = sys.argv[2:]
+            pregunta = ""
+            if "--pregunta" in args:
+                i = args.index("--pregunta")
+                pregunta = " ".join(args[i + 1:])
+                args = args[:i]
+            if not args:
+                print('Uso: main.py --ocr <archivo> [<archivo2> ...] [--pregunta "..."]')
+                sys.exit(2)
+            ask_data_steward(pregunta, thread_id="ocr_session", files=args)
         else:
             # --demo o sin argumentos: batería demostrativa
             run_demo()
