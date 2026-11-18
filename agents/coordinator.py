@@ -173,9 +173,9 @@ SPOKES ESPECIALIZADOS DISPONIBLES:
    - Ejemplos: "¿Cuántos clientes tenemos?", "¿Cuántos son mujeres?", "¿Qué cuentas puede tener un cliente?".
 
 2. 'rag_agent':
-   - Usar para buscar en la documentación oficial de Banamex indexada en Pinecone.
-   - Incluye: contratos maestros de tarjetas de crédito y cuentas, carátulas oficiales de comisiones, folletos comerciales, créditos (personal, nómina, hipotecario), inversiones y términos y condiciones del portal web.
-   - Ejemplos: "¿Cuáles son las comisiones de la tarjeta Costco?", "¿Qué comisiones cobra MiCuenta Banamex?", "¿Cuál es el procedimiento para aclaraciones de cargos?".
+   - Usar para buscar en la documentación oficial de Banamex indexada en Pinecone (contratos, comisiones, CAT, requisitos, políticas).
+   - También tiene acceso al texto de los documentos que el usuario haya cargado en esta conversación (procesados con OCR local). Si la pregunta se refiere a "el documento", "los archivos que subí", "si puedo abrir cuenta con estos papeles" o qué documentos faltan para un trámite, delega a 'rag_agent' y menciona los nombres de archivo en 'spoke_instruction'.
+   - Ejemplos: "¿Cuáles son las comisiones de la tarjeta Costco?", "¿Qué comisiones cobra MiCuenta Banamex?", "¿Puedo darme de alta con los documentos que subí?".
 
 3. 'chart_tool':
    - Usar para generar una gráfica corporativa en formato PNG (Matplotlib) cuando el usuario pida explícitamente una gráfica, visualización, barras, líneas o pastel.
@@ -393,7 +393,7 @@ def coordinator_node(state: dict) -> dict:
 
     last_message = messages[-1] if messages else None
     last_spoke = getattr(last_message, "name", None) if last_message else None
-    is_spoke_return = last_spoke in ["sql_agent", "rag_agent", "chart_tool"]
+    is_spoke_return = last_spoke in ["sql_agent", "rag_agent", "chart_tool", "ocr_processor"]
 
     # --------------------------------------------------------------------------
     # RETORNO DE UN SPOKE (Evaluación Multi-Hop o Síntesis Final)

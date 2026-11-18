@@ -27,6 +27,18 @@ from agents.coordinator import coordinator_node
 from agents.sql_agent import sql_agent_node
 from agents.rag_agent import rag_agent_node
 from tools.chart_tool import chart_tool_node
+from processing.ocr_processor import ocr_processor_node
+
+
+def route_entry(state: AgentState) -> str:
+    """Si el usuario cargó archivos en este turno, primero pasan por el procesador OCR."""
+    return "ocr_processor" if state.get("uploaded_files") else "coordinator"
+
+
+def route_after_ocr(state: AgentState) -> str:
+    """Si el OCR extrajo texto con éxito, el RAG analiza; si todo falló, el Coordinador reporta el error."""
+    ocr_ev = (state.get("evidences") or {}).get("ocr_evidence") or {}
+    return "rag_agent" if ocr_ev.get("extracted_sources") else "coordinator"
 
 
 def route_next_spoke(state: AgentState) -> str:
@@ -46,9 +58,27 @@ def create_hub_spoke_graph():
     graph.add_node("sql_agent", sql_agent_node)
     graph.add_node("rag_agent", rag_agent_node)
     graph.add_node("chart_tool", chart_tool_node)
+    graph.add_node("ocr_processor", ocr_processor_node)
 
-    # 2. Conectar inicio con el Hub Coordinador
-    graph.add_edge(START, "coordinator")
+    # 2. Conectar inicio:
+    #    - Si hay archivos cargados: START -> ocr_processor -> rag_agent -> coordinator
+    #    - Turno normal: START -> coordinator -> spokes -> coordinator
+    graph.add_conditional_edges(
+        START,
+        route_entry,
+        {
+            "ocr_processor": "ocr_processor",
+            "coordinator": "coordinator",
+        }
+    )
+    graph.add_conditional_edges(
+        "ocr_processor",
+        route_after_ocr,
+        {
+            "rag_agent": "rag_agent",
+            "coordinator": "coordinator",
+        }
+    )
 
     # 3. Ruteo condicional desde el Coordinador hacia los Spokes o hacia END
     graph.add_conditional_edges(

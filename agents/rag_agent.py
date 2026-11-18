@@ -15,7 +15,7 @@ ARQUITECTURA (AISLAMIENTO DE CONTEXTO):
 
 import os
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
@@ -27,6 +27,7 @@ from tools.rag_tool import get_retriever
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 RAG_MODEL = os.environ.get("RAG_MODEL", "gemini-3.5-flash")
+MAX_UPLOADED_CHARS = 300_000  # tope de texto de documentos cargados que se envía al LLM
 
 
 def get_rag_llm():
@@ -46,12 +47,34 @@ def extract_content_text(response) -> str:
     return str(content)
 
 
+def format_uploaded_documents(uploaded_documents: Optional[Dict[str, Any]]) -> List[str]:
+    """Convierte el texto extraído por el procesador OCR (canal 'uploaded_documents') en bloques de contexto.
+    Recorta al llegar a MAX_UPLOADED_CHARS para no exceder el contexto del modelo."""
+    blocks: List[str] = []
+    used = 0
+    for source, doc in (uploaded_documents or {}).items():
+        for p in doc.get("pages", []):
+            text = (p.get("text") or "").strip()
+            if not text:
+                continue
+            if used + len(text) > MAX_UPLOADED_CHARS:
+                blocks.append(f"[Documento cargado | Fuente: {source}] (texto restante omitido por longitud)")
+                return blocks
+            used += len(text)
+            blocks.append(
+                f"[DOCUMENTO CARGADO POR EL USUARIO (OCR) | Archivo: {source} "
+                f"(Pág. {p.get('page', 1)} de {doc.get('total_pages', '?')}, Extracción: {p.get('method', 'ocr')})]\n"
+                f"{text}"
+            )
+    return blocks
+
+
 RAG_SYSTEM_PROMPT = """Eres el Especialista en Normativa, Contratos y Gobernanza de Grupo Financiero Banamex (RAG Agent Spoke).
-Tu misión es analizar la documentación oficial bancaria recuperada de Pinecone y responder a la consulta con máxima precisión legal, financiera y técnica.
+Tu misión es analizar la documentación oficial bancaria recuperada de Pinecone y los documentos cargados por el usuario (procesados con OCR local) para responder a la consulta con máxima precisión legal, financiera y técnica.
 
 DIRECTIVAS ESTRICTAS DE CUMPLIMIENTO BANCARIO:
 1. FIDELIDAD CONTRACTUAL ABSOLUTA:
-   - Basa tus respuestas EXCLUSIVAMENTE en los fragmentos de documentos oficiales provistos en la sección EVIDENCIA DOCUMENTAL.
+   - Basa tus respuestas EXCLUSIVAMENTE en los fragmentos provistos en la sección EVIDENCIA DOCUMENTAL.
    - Jamás inventes comisiones, cuotas anuales, porcentajes de CAT, tasas de interés, plazos ni requisitos que no figuren en la evidencia.
    - Si la evidencia no menciona un dato específico solicitado, indícalo con transparencia: "La documentación oficial consultada no especifica [dato]".
 
@@ -63,28 +86,46 @@ DIRECTIVAS ESTRICTAS DE CUMPLIMIENTO BANCARIO:
    - **Condiciones y Requisitos**: Requisitos de contratación o condiciones para exentar comisiones (ej. saldo promedio mínimo).
    - **Fundamento Documental**: Cita al final los contratos o folletos de donde se extrajo la información con su página o sección.
 
-3. TONO INSTITUCIONAL:
+3. DOCUMENTOS CARGADOS POR EL USUARIO (PROCESADOS CON OCR):
+   - Los bloques marcados como '[DOCUMENTO CARGADO POR EL USUARIO (OCR)]' provienen de archivos que el usuario cargó localmente (ej. identificación, comprobante de domicilio, estado de cuenta, contrato externo).
+   - Si el usuario pregunta si puede darse de alta, abrir una cuenta o contratar un servicio con esos documentos:
+     * Compara minuciosamente lo que contiene el documento cargado contra los requisitos oficiales exigidos por las políticas y contratos de Banamex.
+     * Señala claramente qué requisitos se cumplen, cuáles documentos o datos faltan y cualquier advertencia (ej. vigencia de comprobante, legibilidad).
+     * Distingue con precisión entre lo que está en el documento cargado y lo que estipulan las políticas oficiales del banco.
+
+4. TONO INSTITUCIONAL:
    - Mantén un tono formal, profesional, objetivo y de soporte bancario institucional ("Oficialía de Normativa Banamex").
 """
 
 
 @traceable(run_type="chain", name="rag_agent_spoke")
-def run_rag_agent(query: str) -> Dict[str, Any]:
+def run_rag_agent(query: str, uploaded_documents: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Ejecuta el ciclo de vida del Spoke RAG:
-    1. Recuperación de fragmentos en Pinecone (k=6).
-    2. Filtrado y estructuración de contexto documental.
-    3. Síntesis y análisis normativo con Gemini 3.6 Flash.
-    4. Extracción de fuentes citadas para auditoría.
+    1. Procesa documentos cargados por el usuario (si existen).
+    2. Recuperación de fragmentos en Pinecone (k=6).
+    3. Filtrado y estructuración de contexto documental integrado.
+    4. Síntesis y análisis normativo con Gemini 3.6 Flash.
+    5. Extracción de fuentes citadas para auditoría.
     """
     try:
-        retriever = get_retriever(k=6)
-        docs = retriever.invoke(query)
+        uploaded_blocks = format_uploaded_documents(uploaded_documents)
 
-        if not docs:
+        # Recuperación en Pinecone
+        try:
+            retriever = get_retriever(k=6)
+            docs = retriever.invoke(query)
+        except Exception as e:
+            # Si hay documentos cargados, aún podemos responder aunque Pinecone falle
+            if not uploaded_blocks:
+                raise
+            docs = []
+            uploaded_blocks.append(f"[Aviso: No se pudo consultar el repositorio oficial de Pinecone: {e}]")
+
+        if not docs and not uploaded_blocks:
             return {
                 "summary": (
-                    "No se encontró documentación oficial aplicable en el repositorio normativo de Banamex "
+                    "No se encontró documentación oficial aplicable ni documentos cargados válidos "
                     f"para la consulta: '{query}'."
                 ),
                 "retrieved_sources": [],
@@ -92,10 +133,20 @@ def run_rag_agent(query: str) -> Dict[str, Any]:
                 "error": None,
             }
 
-        # Formateo de los fragmentos recuperados con sus metadatos
-        context_blocks = []
+        # Formateo de los fragmentos recuperados de Pinecone con sus metadatos
+        context_blocks = list(uploaded_blocks)
         sources_seen = set()
         sources_list: List[Dict[str, Any]] = []
+
+        # Agregar fuentes de documentos cargados
+        for source, doc in (uploaded_documents or {}).items():
+            sources_list.append({
+                "source": source,
+                "page": doc.get("total_pages", 1),
+                "tipo": "documento_cargado_usuario",
+                "producto": "documento_local",
+                "url": "local://uploaded",
+            })
 
         for i, d in enumerate(docs, 1):
             source = d.metadata.get("source", "documento_banamex")
@@ -115,7 +166,7 @@ def run_rag_agent(query: str) -> Dict[str, Any]:
                     "url": url,
                 })
 
-            header = f"[FUENTE #{i} | Archivo: {source}"
+            header = f"[FUENTE OFICIAL #{i} | Archivo: {source}"
             if page is not None:
                 header += f" (Pág. {page})"
             header += f" | Tipo: {tipo} | Familia: {prod}]"
@@ -128,7 +179,7 @@ def run_rag_agent(query: str) -> Dict[str, Any]:
         llm = get_rag_llm()
         user_prompt = (
             f"CONSULTA DEL USUARIO / INSTRUCCIÓN:\n{query}\n\n"
-            f"EVIDENCIA DOCUMENTAL OFICIAL RECUPERADA DE PINECONE:\n{evidence_text}\n\n"
+            f"EVIDENCIA DOCUMENTAL RECUPERADA (PINECONE Y DOCUMENTOS CARGADOS):\n{evidence_text}\n\n"
             f"Elabora el informe normativo oficial conforme a las directivas de cumplimiento."
         )
 
@@ -142,7 +193,7 @@ def run_rag_agent(query: str) -> Dict[str, Any]:
         return {
             "summary": synthesized_report,
             "retrieved_sources": sources_list,
-            "raw_evidence_count": len(docs),
+            "raw_evidence_count": len(docs) + len(uploaded_blocks),
             "error": None,
         }
 
@@ -162,7 +213,8 @@ def rag_agent_node(state: dict) -> dict:
     Ejecuta el análisis aislado y devuelve la síntesis terminada en `evidences['rag_evidence']`.
     """
     instruction = state.get("spoke_instruction") or state.get("question", "")
-    result = run_rag_agent(instruction)
+    uploaded_docs = state.get("uploaded_documents")
+    result = run_rag_agent(instruction, uploaded_documents=uploaded_docs)
 
     msg_content = f"### [ANÁLISIS DOCUMENTAL Y NORMATIVA BANAMEX]\n{result['summary']}"
 

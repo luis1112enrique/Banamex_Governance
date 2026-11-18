@@ -8,10 +8,11 @@ y trazabilidad completa del Hub y los Spokes.
 
 import os
 import sys
+import shlex
 if sys.stdout:
     sys.stdout.reconfigure(encoding="utf-8")
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from dotenv import load_dotenv
 
 # Cargar variables de entorno ANTES de importar LangGraph/LangChain para activar LangSmith desde el inicio
@@ -26,8 +27,11 @@ from logging_config import (
     log_sql_execution,
     log_rag_retrieval,
     log_chart_generation,
+    log_ocr_extraction,
     log_final_response,
 )
+
+DEFAULT_UPLOAD_QUESTION = "Analiza el documento cargado, resume sus datos clave y valida si cumple con las políticas oficiales de Banamex."
 
 
 def ask_data_steward(
@@ -36,8 +40,14 @@ def ask_data_steward(
     user_role: str = "universal",
     cliente_id: Optional[int] = None,
     auto_open_chart: bool = False,
+    files: Optional[List[str]] = None,
 ) -> dict:
     """Ejecuta el grafo Hub-and-Spoke Multi-Hop trazando cada paso en consola y LangSmith."""
+    files_clean = [str(Path(f).expanduser().resolve()) for f in (files or [])]
+    if files_clean:
+        file_names = ", ".join(Path(f).name for f in files_clean)
+        question = f"{question or DEFAULT_UPLOAD_QUESTION} (Documento(s) cargado(s): {file_names})"
+
     role_badge = "UNIVERSAL" if user_role == "universal" else f"CLIENTE num_cte={cliente_id}"
     log_header(f"[{role_badge}] CONSULTA RECIBIDA: {question}")
 
@@ -64,6 +74,7 @@ def ask_data_steward(
         "next_agent": None,
         "spoke_instruction": None,
         "evidences": {},
+        "uploaded_files": files_clean,
         "chart_path": None,
         "step_count": 0,
         "final_answer": None,
@@ -86,6 +97,9 @@ def ask_data_steward(
             elif node_name == "rag_agent":
                 ev = update.get("evidences", {}).get("rag_evidence", {})
                 log_rag_retrieval(question, ev.get("summary", "N/A"))
+            elif node_name == "ocr_processor":
+                ev = update.get("evidences", {}).get("ocr_evidence", {})
+                log_ocr_extraction([Path(f).name for f in (files_clean or [])], ev.get("summary", "N/A"))
             elif node_name == "chart_tool":
                 ev = update.get("evidences", {}).get("chart_evidence", {})
                 if update.get("chart_path"):
@@ -201,6 +215,7 @@ def run_interactive():
     print("\n" + "=" * 80)
     print(" BANAMEX DATA STEWARD - CONSOLA INTERACTIVA (HUB-AND-SPOKE)")
     print(" Escribe tu consulta, 'cambiar' para cambiar de usuario, o 'salir' para terminar.")
+    print(" Para cargar documentos (OCR -> RAG): /subir <ruta> [<ruta2> ...]  (usa comillas si la ruta tiene espacios)")
     print("=" * 80)
 
     while True:
@@ -215,6 +230,29 @@ def run_interactive():
                 user_role, cliente_id = authenticate_user()
                 thread_id = "interactive_universal" if user_role == "universal" else f"interactive_cliente_{cliente_id}"
                 prompt_label = "[Universal]" if user_role == "universal" else f"[Cliente #{cliente_id}]"
+                continue
+            if q.lower().startswith("/subir"):
+                try:
+                    paths = shlex.split(q[len("/subir"):])
+                except ValueError as e:
+                    print(f"Ruta inválida: {e}")
+                    continue
+                if not paths:
+                    print("Uso: /subir <ruta> [<ruta2> ...]")
+                    continue
+                missing = [p for p in paths if not Path(p).expanduser().is_file()]
+                if missing:
+                    print(f"No se encontraron los archivos: {', '.join(missing)}")
+                    continue
+                pregunta = input(f"{prompt_label} [Pregunta sobre el documento, Enter para resumen y validación] > ").strip()
+                ask_data_steward(
+                    pregunta,
+                    thread_id=thread_id,
+                    user_role=user_role,
+                    cliente_id=cliente_id,
+                    files=paths,
+                    auto_open_chart=True,
+                )
                 continue
             ask_data_steward(
                 q,
@@ -233,5 +271,17 @@ def run_interactive():
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--demo":
         run_demo()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--ocr":
+        # uv run python main.py --ocr archivo1.pdf [archivo2.png ...] [--pregunta "..."]
+        args = sys.argv[2:]
+        pregunta = ""
+        if "--pregunta" in args:
+            i = args.index("--pregunta")
+            pregunta = " ".join(args[i + 1:])
+            args = args[:i]
+        if not args:
+            print('Uso: main.py --ocr <archivo> [<archivo2> ...] [--pregunta "..."]')
+            sys.exit(2)
+        ask_data_steward(pregunta, thread_id="ocr_session", user_role="universal", files=args)
     else:
         run_interactive()
