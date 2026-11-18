@@ -44,7 +44,7 @@ def log_web_search(query: str, result_summary: str):
 
 def log_ocr_extraction(files: list, result_summary: str):
     content = f"[bold cyan]Archivos cargados:[/bold cyan] {', '.join(files) or 'N/A'}\n\n[bold cyan]Resultado de la ingesta:[/bold cyan]\n{result_summary}"
-    console.print(Panel(content, title="Spoke: OCR Agent (Tesseract local)", border_style="cyan"))
+    console.print(Panel(content, title="Procesador OCR (Tesseract local)", border_style="cyan"))
 
 
 def log_final_response(answer: str):

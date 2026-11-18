@@ -13,8 +13,9 @@ Define el flujo cíclico:
                   ▼
           [Coordinador Hub] -> [Sintetizar y FINISH] -> [END]
 
-Si el usuario carga archivos, el turno entra por el OCR:
-   [START] -> [OCR Spoke] -> [RAG Spoke] -> [Coordinador Hub] -> [END]
+Si el usuario carga archivos, el turno entra por el procesador OCR (nodo determinista,
+sin LLM; no es un agente) que extrae el texto localmente y se lo entrega al RAG:
+   [START] -> [Procesador OCR] -> [RAG Spoke] -> [Coordinador Hub] -> [END]
 
 Incluye memoria de checkpointing (MemorySaver) para recordar la sesión de consultas.
 """
@@ -27,7 +28,7 @@ from agents.coordinator import coordinator_node
 from agents.sql_agent import sql_agent_node
 from agents.rag_agent import rag_agent_node
 from agents.web_search_agent import web_search_agent_node
-from agents.ocr_agent import ocr_agent_node
+from processing.ocr_processor import ocr_processor_node
 
 # La funcion recibe como argumento 'state' el estado del agente(AgentState) y recupera el next_agent
 # razonado por el coordinador, de no haber agente seleccionado regresa un FINISH,
@@ -43,8 +44,8 @@ def route_next_spoke(state: AgentState) -> str:
 
 
 def route_entry(state: AgentState) -> str:
-    """Si el usuario cargó archivos en este turno, primero pasan por el OCR Agent."""
-    return "ocr_agent" if state.get("uploaded_files") else "coordinator"
+    """Si el usuario cargó archivos en este turno, primero pasan por el procesador OCR."""
+    return "ocr_processor" if state.get("uploaded_files") else "coordinator"
 
 
 def route_after_ocr(state: AgentState) -> str:
@@ -65,17 +66,17 @@ def create_hub_spoke_graph():
     graph.add_node("sql_agent", sql_agent_node)
     graph.add_node("rag_agent", rag_agent_node)
     graph.add_node("web_search_agent", web_search_agent_node)
-    graph.add_node("ocr_agent", ocr_agent_node)
+    graph.add_node("ocr_processor", ocr_processor_node)
 
     # 2. Conectar inicio con el Hub Coordinador (o con el OCR si hay archivos cargados):
-    #    START -> ocr_agent -> rag_agent -> coordinator (síntesis)
+    #    START -> ocr_processor -> rag_agent -> coordinator (síntesis)
     graph.add_conditional_edges(
         START,
         route_entry,
-        {"ocr_agent": "ocr_agent", "coordinator": "coordinator"}
+        {"ocr_processor": "ocr_processor", "coordinator": "coordinator"}
     )
     graph.add_conditional_edges(
-        "ocr_agent",
+        "ocr_processor",
         route_after_ocr,
         {"rag_agent": "rag_agent", "coordinator": "coordinator"}
     )

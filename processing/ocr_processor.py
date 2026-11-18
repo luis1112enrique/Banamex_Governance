@@ -1,7 +1,8 @@
 """
-agents/ocr_agent.py
+processing/ocr_processor.py
 
-Spoke de OCR LOCAL para documentos cargados por el usuario.
+Procesador OCR LOCAL para documentos cargados por el usuario.
+No es un agente: es un nodo determinista del grafo (sin LLM, sin decisiones) que alimenta al RAG Agent.
 Flujo:  archivo(s) -> extracción de texto por página (en la máquina local) -> canal 'uploaded_documents' -> RAG Agent
 Los archivos NUNCA salen de la máquina: no se envían a Gemini ni se escriben en Pinecone.
 Solo el texto extraído llega después al RAG Agent como contexto.
@@ -122,7 +123,7 @@ def extract_file_pages(path: Path) -> list[dict]:
 # EJECUCIÓN DEL SPOKE
 # ==============================================================================
 
-def run_ocr_agent(file_paths: list[str]) -> dict:
+def run_ocr(file_paths: list[str]) -> dict:
     """Extrae el texto de los archivos cargados. Regresa la evidencia y los documentos extraídos."""
     documents: dict[str, dict] = {}
     files_report: list[dict] = []
@@ -134,7 +135,7 @@ def run_ocr_agent(file_paths: list[str]) -> dict:
             check_tesseract()
         except RuntimeError as e:
             return {
-                "evidence": {"files": [], "extracted_sources": [], "summary": f"Error en OCR Agent: {e}", "error": str(e)},
+                "evidence": {"files": [], "extracted_sources": [], "summary": f"Error en el procesador OCR: {e}", "error": str(e)},
                 "documents": {},
             }
 
@@ -179,9 +180,9 @@ def run_ocr_agent(file_paths: list[str]) -> dict:
     }
 
 
-def ocr_agent_node(state: dict) -> dict:
-    """Nodo de LangGraph para el agente OCR local de documentos cargados."""
-    result = run_ocr_agent(state.get("uploaded_files") or [])
+def ocr_processor_node(state: dict) -> dict:
+    """Nodo determinista de LangGraph: OCR local de los documentos cargados."""
+    result = run_ocr(state.get("uploaded_files") or [])
     evidence = result["evidence"]
 
     msg_content = f"### [EVIDENCIA OCR - DOCUMENTOS CARGADOS]\n{evidence['summary']}"
@@ -191,5 +192,5 @@ def ocr_agent_node(state: dict) -> dict:
         # El texto extraído viaja en el estado hacia el RAG Agent (y persiste en el hilo para preguntas de seguimiento).
         "uploaded_documents": result["documents"],
         "uploaded_files": [],  # Se consumen los archivos para que no se reprocesen en el siguiente turno
-        "messages": [AIMessage(content=msg_content, name="ocr_agent")],
+        "messages": [AIMessage(content=msg_content, name="ocr_processor")],
     }

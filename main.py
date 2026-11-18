@@ -35,7 +35,7 @@ DEFAULT_UPLOAD_QUESTION = "Resume el contenido principal del documento cargado y
 
 def ask_data_steward(question: str, thread_id: str = "demo_thread", files: list[str] | None = None):
     """Ejecuta el grafo Hub-and-Spoke trazando cada paso en consola.
-    Si se pasan 'files', el turno entra por el OCR Agent, que extrae el texto y se lo pasa al RAG."""
+    Si se pasan 'files', el turno entra por el procesador OCR, que extrae el texto y se lo pasa al RAG."""
     files = [str(Path(f).expanduser().resolve()) for f in (files or [])]
     if files:
         file_names = ", ".join(Path(f).name for f in files)
@@ -72,7 +72,7 @@ def ask_data_steward(question: str, thread_id: str = "demo_thread", files: list[
             elif node_name == "web_search_agent":
                 ev = update.get("evidences", {}).get("web_evidence", {})
                 log_web_search(question, ev.get("summary", "N/A"))
-            elif node_name == "ocr_agent":
+            elif node_name == "ocr_processor":
                 ev = update.get("evidences", {}).get("ocr_evidence", {})
                 log_ocr_extraction([Path(f).name for f in files], ev.get("summary", "N/A"))
 

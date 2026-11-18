@@ -259,8 +259,10 @@ def coordinator_node(state: dict) -> dict:
 
     # Detectar si el último mensaje proviene de un spoke que acaba de finalizar su trabajo
     last_message = messages[-1] if messages else None
-    # 'ocr_agent' solo llega aquí directamente si no logró indexar nada (si indexa, pasa primero por el RAG).
-    is_spoke_return = bool(last_message and getattr(last_message, "name", None) in ["sql_agent", "rag_agent", "web_search_agent", "ocr_agent"])
+    # Además de los 3 spokes, el procesador OCR (nodo determinista, no agente) llega aquí directamente
+    # cuando no logró extraer texto; si extrae, pasa primero por el RAG Agent.
+    evidence_nodes = ["sql_agent", "rag_agent", "web_search_agent", "ocr_processor"]
+    is_spoke_return = bool(last_message and getattr(last_message, "name", None) in evidence_nodes)
 
     # --------------------------------------------------------------------------
     # FASE 2: SÍNTESIS DE EVIDENCIA (Regreso de un Spoke)

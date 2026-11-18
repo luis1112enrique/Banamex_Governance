@@ -61,11 +61,11 @@ class AgentState(TypedDict):
     evidences: Annotated[Dict[str, Any], merge_evidences]
 
     # Rutas de archivos cargados por el usuario en este turno. Si hay archivos, el grafo pasa
-    # primero por el OCR Agent (extrae el texto) y luego por el RAG Agent.
-    # main.py lo reinicia en cada turno y el OCR Agent lo vacía al consumirlo.
+    # primero por el procesador OCR (extrae el texto) y luego por el RAG Agent.
+    # main.py lo reinicia en cada turno y el procesador OCR lo vacía al consumirlo.
     uploaded_files: Optional[List[str]]
 
-    # Texto extraído por el OCR Agent: {nombre_archivo: {"total_pages": int, "pages": [{page, text, method}]}}.
+    # Texto extraído por el procesador OCR: {nombre_archivo: {"total_pages": int, "pages": [{page, text, method}]}}.
     # No se indexa en Pinecone; el RAG Agent lo usa directamente como contexto. Persiste en el hilo
     # (checkpointer) para preguntas de seguimiento; volver a subir un archivo con el mismo nombre lo reemplaza.
     uploaded_documents: Annotated[Dict[str, Any], merge_documents]

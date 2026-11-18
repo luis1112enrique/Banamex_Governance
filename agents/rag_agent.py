@@ -41,7 +41,7 @@ def get_rag_llm():
 
 
 def format_uploaded_documents(uploaded_documents: dict | None) -> list[str]:
-    """Convierte el texto extraído por el OCR Agent (canal 'uploaded_documents') en bloques de contexto.
+    """Convierte el texto extraído por el procesador OCR (canal 'uploaded_documents') en bloques de contexto.
     Recorta al llegar a MAX_UPLOADED_CHARS para no exceder el contexto del modelo."""
     blocks, used = [], 0
     for source, doc in (uploaded_documents or {}).items():
@@ -61,7 +61,7 @@ def format_uploaded_documents(uploaded_documents: dict | None) -> list[str]:
 def run_rag_agent(question: str, uploaded_documents: dict | None = None) -> dict:
     """
     Recupera contexto de Pinecone y genera una respuesta fundamentada con Gemini 3.5 Flash.
-    Si hay 'uploaded_documents' (texto extraído por el OCR Agent), se agregan al contexto
+    Si hay 'uploaded_documents' (texto extraído por el procesador OCR), se agregan al contexto
     directamente; no se buscan ni se guardan en Pinecone.
     """
     # Fuera del try: un error de configuración es terminal y no debe convertirse en evidencia.
@@ -142,7 +142,7 @@ Si la información no se encuentra en el texto proporcionado, indícalo claramen
 def rag_agent_node(state: dict) -> dict:
     """Nodo de LangGraph para el agente RAG normativo."""
     instruction = state.get("spoke_instruction") or state.get("question", "")
-    # Texto de los documentos cargados en este hilo (extraído por el OCR Agent, no indexado en Pinecone).
+    # Texto de los documentos cargados en este hilo (extraído por el procesador OCR, no indexado en Pinecone).
     result = run_rag_agent(instruction, uploaded_documents=state.get("uploaded_documents"))
 
     msg_content = f"### [EVIDENCIA RAG - DOCUMENTACIÓN OFICIAL BANAMEX]\n{result['summary']}"
