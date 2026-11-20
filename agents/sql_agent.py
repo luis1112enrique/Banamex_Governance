@@ -292,9 +292,12 @@ REGLAS DE NEGOCIO Y GOBERNANZA BANCARIA OBLIGATORIAS:
    - Captación (Depósitos de clientes): 'CHEQUES' y 'AHORRO' (o `p.grupo_producto = 'CAPTACION'`).
    - Colocación (Créditos y financiamiento): 'C_PERSONAL' y 'TDC' (o `p.grupo_producto = 'COLOCACION'`).
 
-6. LLAVES FORÁNEAS Y JOINS:
-   - Vincular saldos con clientes: `cfg.fact_sdos_captacoloca_m.num_cte = dim.dim_cliente.num_cte`
-   - Vincular saldos con productos: `cfg.fact_sdos_captacoloca_m.cve_producto = dim.dim_producto.cve_producto`
+6. LLAVES FORÁNEAS, CARDINALIDAD Y JOINS (CAPA SEMÁNTICA OFICIAL):
+   - `cliente_saldos` (N:1, INNER JOIN): `cfg.fact_sdos_captacoloca_m.num_cte = dim.dim_cliente.num_cte`
+   - `cliente_transacciones` (N:1, INNER JOIN): `cfg.fact_txn_captacoloca_d.num_cte = dim.dim_cliente.num_cte`
+   - `producto_saldos` (N:1, INNER JOIN): `cfg.fact_sdos_captacoloca_m.cve_producto = dim.dim_producto.cve_producto`
+   - `producto_transacciones` (N:1, INNER JOIN): `cfg.fact_txn_captacoloca_d.cve_producto = dim.dim_producto.cve_producto`
+   - RESTRICCIÓN DE INTEGRIDAD: NUNCA unir `fact_txn_captacoloca_d` con `dim_txn` usando únicamente `cve_txn` porque no es unívoca; requiere contexto de producto o dominio.
 
 7. FORMATO DE RESPUESTA:
    - Responde ÚNICAMENTE la consulta SQL limpia en PostgreSQL dentro de un bloque ```sql ... ```.
