@@ -68,7 +68,8 @@ MultiAgentHS/
 ├── pyproject.toml             # Gestión moderna y reproducible de dependencias con uv
 ├── state.py                   # Esquema tipado del AgentState para LangGraph
 ├── workflow.py                # Definición del StateGraph compilado con checkpointing
-└── ui_streamlit.py            # Interfaz gráfica (en desarrollo)
+├── ui_backend.py              # Adaptador del grafo, evidencias y comprobaciones de conexión
+└── app.py                     # Interfaz Streamlit: chat, perfiles, gráficas y auditoría
 ```
 
 ---
@@ -123,6 +124,38 @@ uv run python main.py --demo
 
 # Modo consola interactiva:
 uv run python main.py --interactive
+```
+
+### 6. Abrir la aplicación web Streamlit
+
+Desde la raíz del proyecto:
+
+```bash
+uv run streamlit run app.py
+```
+
+Abre `http://localhost:8501`. La interfaz carga el `.env` del proyecto y utiliza
+el grafo existente de `workflow.py`, conservando cada consulta SQL, referencia RAG
+y salto del coordinador en el desplegable de auditoría. Los PNG generados se
+muestran dentro del chat. Configura `GOOGLE_API_KEY`, la conexión `PG*`,
+`PINECONE_API_KEY` e `INDEX_NAME`; para recuperación documental también debe
+estar disponible Ollama con `bge-large`.
+
+El perfil universal tiene acceso analítico global; el perfil cliente envía su
+`num_cte` al validador SQL existente. El selector es una herramienta de demostración,
+no una autenticación de identidad ni una política RLS de PostgreSQL. Al cambiar
+de perfil, cliente o conversación, se abre un hilo nuevo y se limpia el chat.
+Las sesiones permanecen en memoria mientras el servidor está en ejecución.
+
+Los indicadores comprueban las conexiones de solo lectura y muestran errores o
+servicios sin configurar cuando corresponde. El indicador de LangSmith distingue
+tracing desactivado de una credencial verificada; no envía trazas de prueba.
+La interfaz no incorpora carga de archivos ni ejecución de OCR.
+
+Pruebas locales de la interfaz y su adaptador (sin llamadas a servicios externos):
+
+```bash
+uv run python -m unittest discover -s tests -v
 ```
 
 ---

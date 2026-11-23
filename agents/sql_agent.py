@@ -22,6 +22,7 @@ from langchain_community.utilities import SQLDatabase
 from langsmith import traceable
 
 from agents.llm import get_gemini_llm
+from service_errors import public_service_error
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -352,6 +353,7 @@ def run_sql_agent(
     # Fuera del try: un error de configuración es terminal y no debe convertirse en evidencia.
     llm = get_sql_llm()
     db = get_db_instance()
+    clean_sql = None
 
     try:
         system_prompt = SQL_SYSTEM_PROMPT
@@ -420,12 +422,13 @@ def run_sql_agent(
         }
 
     except Exception as e:
-        error_msg = f"Error en SQL Agent: {str(e)}"
+        diagnostic = public_service_error(e, source="sql")
         return {
-            "sql_query": None,
+            "sql_query": clean_sql,
             "raw_result": None,
-            "summary": error_msg,
-            "error": str(e),
+            "summary": diagnostic["message"],
+            "error": diagnostic["code"],
+            "diagnostic": diagnostic,
         }
     finally:
         db._engine.dispose()
