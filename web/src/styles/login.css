@@ -1,0 +1,72 @@
+.login-redesign{min-height:100dvh;background:#fff;color:#003746;overflow-x:clip}
+.login-redesign .access-header{height:76px;display:flex;align-items:center;justify-content:space-between;gap:20px;padding:0 clamp(32px,6.8vw,132px)}
+.login-redesign .access-project{font-size:18px;font-weight:700;letter-spacing:-.5px;white-space:nowrap}
+.login-redesign .access-project strong{color:#FF1B44}
+.login-redesign .access-prototype{font-size:11px;color:#526d76;background:#F4F6F7;border:1px solid #e8edef;border-radius:20px;padding:8px 13px;text-align:center}
+.login-redesign .access-layout{display:grid;grid-template-columns:42% 58%;min-height:calc(100dvh - 76px)}
+.login-redesign .access-form-area{display:flex;align-items:center;padding:24px 16px 50px clamp(32px,6.8vw,132px);min-width:0}
+.login-redesign .access-form-content{width:100%;max-width:410px}
+.login-redesign .access-eyebrow{margin:0 0 16px;color:#007D8F;font-size:11px;font-weight:700;letter-spacing:2.2px}
+.login-redesign h1{margin:0 0 18px;font-size:clamp(42px,3.9vw,64px);line-height:1.08;letter-spacing:-2.2px;font-weight:650}
+.login-redesign .access-intro{margin:0 0 25px;color:#5c727b;font-size:15px;line-height:1.55;max-width:390px}
+.login-redesign .access-portal-switch{position:relative;display:flex;gap:4px;padding:4px;border-radius:14px;background:#F4F6F7;margin-bottom:24px}
+.login-redesign .access-portal-switch::before{content:"";position:absolute;top:4px;bottom:4px;left:4px;width:calc((100% - 12px)/2);border-radius:10px;background:#fff;box-shadow:0 1px 4px #00374610;pointer-events:none;transition:transform .28s cubic-bezier(.22,1,.36,1)}
+.login-redesign .access-portal-switch[data-portal="institucional"]::before{transform:translateX(calc(100% + 4px))}
+.login-redesign .access-portal-switch button{position:relative;z-index:1;flex:1;padding:11px 6px;border:0;border-radius:10px;color:#526d76;background:transparent;font-size:12px;font-weight:650;white-space:nowrap;transition:color .2s ease}
+.login-redesign .access-portal-switch button.active{color:#003746}
+.login-redesign .access-form{display:flex;flex-direction:column;gap:9px}
+.login-redesign .access-form label{font-size:12px;font-weight:650;color:#003746}
+.login-redesign .access-form>input,.login-redesign .access-password-field{height:54px;border:1px solid #ccdadd;border-radius:14px;background:#fff}
+.login-redesign .access-form>input{padding:0 16px;outline:none;width:100%;color:#003746;font-size:14px;margin-bottom:10px;box-sizing:border-box}
+.login-redesign .access-password-field{display:flex;align-items:center;overflow:hidden}
+.login-redesign .access-password-field input{width:100%;min-width:0;flex:1;height:100%;padding:0 16px;border:0;border-radius:14px;background:transparent;outline:none;color:#003746;font-size:14px}
+.login-redesign .access-password-field button{display:grid;place-items:center;flex:0 0 46px;height:100%;background:transparent;border:0;color:#526d76}
+.login-redesign .access-form>input::placeholder,.login-redesign .access-password-field input::placeholder{color:#6e8087}
+.login-redesign .access-form>input:focus,.login-redesign .access-password-field:focus-within{border-color:#007D8F;box-shadow:0 0 0 3px #007d8f14}
+.login-redesign .access-submit{display:flex;align-items:center;justify-content:center;gap:10px;height:56px;width:100%;margin-top:14px;border:0;border-radius:16px;background:#003746;color:#fff;font-size:15px;font-weight:650;transition:background .16s}
+.login-redesign .access-submit:hover:not(:disabled){background:#005061}
+.login-redesign .access-submit:disabled{opacity:.58;cursor:not-allowed}
+.login-redesign button:focus-visible{outline:3px solid #007D8F;outline-offset:3px}
+.login-redesign .access-error{margin:1px 0;color:#b81b3c;font-size:13px;line-height:1.45}
+.login-redesign .access-safety{display:flex;align-items:flex-start;gap:9px;margin-top:20px;color:#6a7d84}
+.login-redesign .access-safety svg{flex-shrink:0;margin-top:1px;color:#007D8F}
+.login-redesign .access-safety p{margin:0;font-size:11px;line-height:1.55}
+.login-redesign .access-safety strong{font-weight:600;color:#526d76}
+.login-redesign .access-symbol{position:relative;display:flex;align-items:center;justify-content:center;min-width:0;overflow:hidden;padding:0 0 28px}
+.login-redesign .access-emblem{--emblem-x:7%;--emblem-y:0px;position:absolute;display:block;width:clamp(615px,50.3vw,950px);max-width:none;transform:translate(var(--emblem-x),var(--emblem-y));animation:access-emblem-arrive .85s cubic-bezier(.22,1,.36,1) both}
+.login-redesign .access-emblem-art{display:block;width:100%;height:auto;animation:access-emblem-float 9s ease-in-out .85s infinite;will-change:transform}
+.login-redesign .access-form-content{animation:access-form-arrive .55s cubic-bezier(.22,1,.36,1) both}
+.login-redesign .access-form>input,.login-redesign .access-password-field{transition:border-color .2s ease,box-shadow .2s ease}
+.login-redesign .access-submit{transition:background .2s ease,transform .2s cubic-bezier(.22,1,.36,1),box-shadow .2s ease}
+@keyframes access-emblem-arrive{from{opacity:0;transform:translate(var(--emblem-x),calc(var(--emblem-y) + 18px)) scale(.985)}to{opacity:1;transform:translate(var(--emblem-x),var(--emblem-y)) scale(1)}}
+@keyframes access-emblem-float{0%,100%{transform:translateY(0) rotate(0)}50%{transform:translateY(-7px) rotate(.35deg)}}
+@keyframes access-form-arrive{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@media(hover:hover) and (pointer:fine){.login-redesign .access-submit:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 6px 18px #00374618}.login-redesign .access-submit:active:not(:disabled){transform:translateY(0) scale(.99)}}
+@media(min-width:1100px) and (max-height:780px){
+.login-redesign .access-header{height:60px}
+.login-redesign .access-layout{min-height:calc(100dvh - 60px)}
+.login-redesign .access-form-area{padding-top:12px;padding-bottom:24px}
+.login-redesign .access-eyebrow{margin-bottom:12px}
+.login-redesign h1{font-size:46px;margin-bottom:14px}
+.login-redesign .access-intro{margin-bottom:18px;font-size:14px}
+.login-redesign .access-portal-switch{margin-bottom:19px}
+.login-redesign .access-safety{margin-top:16px}
+}
+@media(max-width:1000px){
+.login-redesign .access-header{padding:0 32px}
+.login-redesign .access-layout{grid-template-columns:50% 50%}
+.login-redesign .access-form-area{padding-left:32px;padding-right:20px}
+.login-redesign .access-emblem{width:580px;--emblem-x:15%}
+.login-redesign h1{font-size:44px}
+}
+@media(max-width:700px){
+.login-redesign .access-header{height:auto;min-height:70px;align-items:flex-start;flex-direction:column;justify-content:center;gap:8px;padding:18px 24px}
+.login-redesign .access-prototype{font-size:10px;padding:5px 9px}
+.login-redesign .access-layout{display:block;min-height:0}
+.login-redesign .access-form-area{position:relative;padding:32px 24px 44px;z-index:1}
+.login-redesign .access-form-content{max-width:430px;margin:auto}
+.login-redesign h1{font-size:44px}
+.login-redesign .access-symbol{height:250px;padding:0;justify-content:flex-end}
+.login-redesign .access-emblem{width:370px;--emblem-x:10%;--emblem-y:12%}
+}
+@media(prefers-reduced-motion:reduce){.login-redesign .access-form-content,.login-redesign .access-emblem,.login-redesign .access-emblem-art{animation:none;will-change:auto}.login-redesign .access-portal-switch::before,.login-redesign .access-portal-switch button,.login-redesign .access-form>input,.login-redesign .access-password-field,.login-redesign .access-submit{transition:none}.login-redesign .access-submit:hover:not(:disabled),.login-redesign .access-submit:active:not(:disabled){transform:none}}

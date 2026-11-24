@@ -11,6 +11,13 @@ wheels/
 
 # Environment files
 .env
+/.streamlit/secrets.toml
+/.streamlit/test_access.json
+/.streamlit/credenciales_locales.txt
+/web/node_modules/
+/web/dist/
+/web/*.tsbuildinfo
+/.local/web-qa/
 *.env.local
 
 # IDE & OS

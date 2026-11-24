@@ -1,0 +1,105 @@
+/* Presentation only: preserve source values, account categories and role scope. */
+.bank-main .page-heading{align-items:center;gap:24px;margin-bottom:14px}
+.bank-main .page-heading .eyebrow{font-size:12px;line-height:1.4;letter-spacing:.1em}
+.bank-main .page-heading h1{font-size:32px;line-height:1.18;margin-top:5px;letter-spacing:-.035em}
+.bank-main .page-heading>div>p:last-child{font-size:14px;line-height:1.5;margin-top:7px}
+.institutional-main .page-heading h1{font-size:30px;max-width:810px}
+.bank-main .data-context{display:flex;align-items:center;gap:10px 22px;flex-wrap:wrap;padding:10px 14px;margin-bottom:18px;border:1px solid #DFE7E9;border-radius:12px;background:#EFF4F5}
+.bank-main .data-context-details{display:flex;align-items:center;flex-wrap:wrap;gap:10px 14px;flex-shrink:0}
+.bank-main .data-context .cutoff{font-size:13px;color:#4F6974}
+.bank-main .data-context .verified-pill,.bank-main .data-context .profile-pill{font-size:12px;line-height:1.4;padding:4px 9px}
+.bank-main .data-context .source-note{display:flex;align-items:flex-start;gap:7px;flex:1 1 300px;margin:0;font-size:12px;line-height:1.5;color:#506C77}
+.bank-main .source-note>svg{flex-shrink:0;margin-top:2px}
+.bank-main :is(.secondary-button,.primary-button,.icon-button){border-radius:12px}
+.bank-main .secondary-button{border-color:#C9DAE0}
+.bank-main .overview-grid{gap:18px}
+.bank-main :is(.balance-card,.ai-intro-card,.account-card,.panel,.metric-card,.institution-assistant-card,.unavailable-product){border-radius:18px}
+.bank-main .balance-card{min-height:190px;padding:20px 24px 18px}
+.bank-main .balance-label{font-size:15px;line-height:1.4}
+.bank-main .main-balance{font-size:38px;line-height:1.2;margin-top:12px}
+.bank-main .balance-card>p{font-size:13px;line-height:1.5;margin-top:4px}
+.bank-main .balance-card-bottom{gap:22px;font-size:12px;line-height:1.5;margin-top:14px;padding-top:12px}
+.bank-main .ai-intro-card{padding:19px 24px;border-color:#E6D8E8}
+.bank-main .ai-intro-card .ai-card-icon{top:18px;right:20px;width:36px;height:36px;border-radius:12px}
+.bank-main .ai-intro-card .eyebrow{font-size:11px;line-height:1.5;margin:0 44px 8px 0}
+.bank-main .ai-intro-card h2{font-size:23px;line-height:1.2;letter-spacing:-.025em}
+.bank-main .ai-intro-card>p:not(.eyebrow){font-size:14px;line-height:1.45;margin-top:9px;max-width:330px;color:#6A5B73}
+.bank-main .ai-intro-card .text-button{font-size:14px;line-height:1.4;margin-top:8px}
+.bank-main .content-section{margin-top:24px}
+.bank-main .section-heading{gap:16px;margin-bottom:14px}
+.bank-main .section-heading h2{font-size:21px;line-height:1.3;letter-spacing:-.025em}
+.bank-main .section-heading .text-button{font-size:14px}
+.bank-main .accounts-grid{gap:18px}
+.bank-main .account-card{min-height:194px;padding:18px}
+.bank-main .account-card-top{margin-bottom:12px}
+.bank-main .account-icon{width:34px;height:34px;border-radius:12px}
+.bank-main .account-category{font-size:12px;line-height:1.4;color:#42636E}
+.bank-main .account-card h3{font-size:17px;line-height:1.3}
+.bank-main .account-number{font-size:12px;line-height:1.5;margin-top:4px;color:#4F6D78}
+.bank-main .account-card-bottom{padding-top:15px;gap:3px}
+.bank-main .account-card-bottom>span{font-size:12px;line-height:1.4;color:#4F6D78}
+.bank-main .account-card-bottom strong{font-size:26px;line-height:1.25}
+.bank-main .panel{padding:21px 23px;border-color:#DFE7E9}
+.bank-main .panel>.section-heading{margin-bottom:14px}
+.bank-main .section-subtitle{font-size:14px;line-height:1.5;margin-bottom:14px;color:#5D7680}
+.bank-main .panel-footnote,.bank-main .data-footer{font-size:12px;line-height:1.6;color:#5D7680}
+.bank-main .transactions-meta,.bank-main .pagination{font-size:13px;color:#536D78}
+.bank-main .transaction-table,.bank-main .institution-table{font-size:14px}
+.bank-main .product-row p,.bank-main .concept-list small{font-size:13px;line-height:1.5;color:#5D7680}
+.bank-main .institution-metrics{gap:18px}
+.bank-main .metric-card{padding:19px 22px;border-color:#DFE7E9}
+.bank-main .metric-icon{width:35px;height:35px;border-radius:12px;margin-bottom:13px}
+.bank-main .metric-card>span:not(.metric-icon){font-size:14px;line-height:1.4;color:#536E79}
+.bank-main .metric-card strong{font-size:29px;line-height:1.2;margin-top:6px}
+.bank-main .metric-card small{font-size:12px;line-height:1.5;margin-top:7px;color:#5D7680}
+.bank-main .institution-grid{gap:18px}
+.bank-main .product-bars{gap:18px;margin-top:19px}
+.bank-main .product-bar>div{font-size:14px;line-height:1.45;margin-bottom:8px}
+.bank-main .product-bar small{font-size:12px;color:#5D7680}
+.bank-main .institution-assistant-card{padding:23px 25px}
+.bank-main .institution-assistant-card .ai-card-icon{width:38px;height:38px;border-radius:12px;margin-bottom:16px}
+.bank-main .institution-assistant-card .eyebrow{font-size:11px;line-height:1.5}
+.bank-main .institution-assistant-card h2{font-size:27px;line-height:1.2;margin-top:8px}
+.bank-main .institution-assistant-card>p:not(.eyebrow){font-size:14px;line-height:1.55;margin-top:12px;color:#496C65}
+.bank-main .institution-assistant-card .primary-button{font-size:14px;margin-top:18px}
+.bank-main .institution-table td{padding-top:15px;padding-bottom:15px}
+@media(max-width:1150px){
+  .bank-main .page-heading h1,.institutional-main .page-heading h1{font-size:29px}
+  .bank-main .data-context{gap:9px 16px}
+  .bank-main .account-card{min-height:194px}
+  .bank-main .metric-card strong{font-size:26px}
+}
+@media(max-width:900px){
+  .bank-main .page-heading{align-items:flex-start;gap:16px}
+  .bank-main .institution-metrics .metric-card:first-child{padding:18px 22px}
+  .bank-main .institution-metrics .metric-card:first-child .metric-icon{margin:0}
+  .bank-main .institution-metrics .metric-card:first-child strong{font-size:29px;margin:0}
+  .bank-main .institution-metrics .metric-card:first-child small{margin:4px 0 0}
+}
+@media(max-width:700px){
+  .bank-main .page-heading{gap:12px;margin-bottom:13px}
+  .bank-main .page-heading .eyebrow{font-size:11px}
+  .bank-main .page-heading h1,.institutional-main .page-heading h1{font-size:26px;line-height:1.2}
+  .bank-main .page-heading>div>p:last-child{font-size:14px;line-height:1.5}
+  .bank-main .data-context{padding:10px 12px;margin-bottom:16px}
+  .bank-main .data-context-details{flex-shrink:1;gap:8px 12px}
+  .bank-main .data-context .source-note{flex-basis:100%;font-size:12px}
+  .bank-main .overview-grid,.bank-main .accounts-grid,.bank-main .institution-metrics{gap:12px}
+  .bank-main .balance-card{min-height:188px;padding:20px}
+  .bank-main .main-balance{font-size:35px}
+  .bank-main .ai-intro-card{padding:20px}
+  .bank-main .ai-intro-card h2{font-size:22px}
+  .bank-main .content-section{margin-top:22px}
+  .bank-main .section-heading h2{font-size:20px}
+  .bank-main .section-heading .text-button{font-size:13px}
+  .bank-main .account-card{padding:15px;min-height:190px}
+  .bank-main .account-card h3{font-size:16px}
+  .bank-main .account-category{font-size:11px;padding-inline:7px}
+  .bank-main .account-card-bottom strong{font-size:23px}
+  .bank-main .panel{padding:19px 18px}
+  .bank-main .metric-card{padding:17px 16px}
+  .bank-main .metric-card strong{font-size:23px}
+  .bank-main .metric-card>span:not(.metric-icon){font-size:13px}
+  .bank-main .institution-metrics .metric-card:first-child{padding:17px 16px}
+  .bank-main .institution-table{font-size:13px}
+}
