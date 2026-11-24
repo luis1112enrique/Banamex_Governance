@@ -1,0 +1,20 @@
+[server]
+address = "127.0.0.1"
+
+[theme]
+base = "light"
+primaryColor = "#0076CE"
+backgroundColor = "#F4F6F9"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1E3350"
+borderColor = "#D9E2EF"
+showWidgetBorder = true
+baseRadius = "0.65rem"
+buttonRadius = "0.55rem"
+font = "sans serif"
+
+[theme.sidebar]
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F6F9"
+textColor = "#1E3350"
+borderColor = "#D9E2EF"

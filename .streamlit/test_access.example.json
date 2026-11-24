@@ -1,0 +1,17 @@
+{
+  "environment": "test",
+  "enabled": false,
+  "sources": {
+    "postgres_host": "REPLACE_WITH_AUTHORIZED_TEST_HOST",
+    "postgres_port": "5432",
+    "postgres_database": "REPLACE_WITH_AUTHORIZED_TEST_DATABASE",
+    "pinecone_index": "REPLACE_WITH_AUTHORIZED_TEST_INDEX",
+    "entire_corpus_authorized": false
+  },
+  "users": {
+    "REPLACE_WITH_TEST_IDENTITY": {
+      "profile": "data_steward",
+      "password_hash": "pbkdf2_sha256$600000$REPLACE_WITH_RANDOM_SALT_HEX$REPLACE_WITH_DERIVED_HASH_HEX"
+    }
+  }
+}

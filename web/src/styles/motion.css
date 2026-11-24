@@ -1,0 +1,107 @@
+/* Presentation motion only: data, document layout and busy states stay unchanged. */
+:root {
+  --motion-quick: 180ms;
+  --motion-standard: 220ms;
+  --motion-entry: 240ms;
+  --motion-ease: cubic-bezier(.2, .75, .25, 1);
+}
+
+.banking-app :is(.primary-button, .secondary-button, .text-button, .icon-button, .assistant-launcher),
+.ai-workspace :is(.ai-icon-button, .ai-back-button, .ai-new-conversation, .ai-dashboard-link, .ai-send-button, .ai-attach-button, .ai-pending-attachments button) {
+  transition: transform var(--motion-quick) var(--motion-ease), background-color var(--motion-standard) ease,
+    border-color var(--motion-standard) ease, color var(--motion-standard) ease,
+    box-shadow var(--motion-standard) ease, opacity var(--motion-quick) ease;
+}
+.banking-app .main-nav button,
+.ai-workspace :is(.ai-history-item, .ai-suggestion-card) {
+  transition: transform var(--motion-quick) var(--motion-ease), background-color var(--motion-standard) ease,
+    border-color var(--motion-standard) ease, color var(--motion-standard) ease,
+    box-shadow var(--motion-standard) ease, opacity var(--motion-quick) ease;
+}
+.ai-workspace .ai-composer {
+  transition: border-color var(--motion-standard) ease, box-shadow var(--motion-standard) ease;
+}
+.ai-workspace .ai-composer:focus-within { box-shadow: 0 0 0 3px #007D8F0D; }
+
+/* Static product and metric cards deliberately receive no hover affordance. */
+@media (hover: hover) and (pointer: fine) {
+  .banking-app :is(.primary-button, .secondary-button, .assistant-launcher):hover:not(:disabled),
+  .ai-workspace :is(.ai-back-button, .ai-new-conversation, .ai-suggestion-card):hover:not(:disabled) {
+    transform: translateY(-2px);
+  }
+  .banking-app .icon-button:hover:not(:disabled),
+  .ai-workspace :is(.ai-icon-button, .ai-send-button, .ai-attach-button):hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+}
+.banking-app :is(.primary-button, .secondary-button, .icon-button, .assistant-launcher):active:not(:disabled),
+.ai-workspace :is(.ai-icon-button, .ai-back-button, .ai-new-conversation, .ai-suggestion-card, .ai-send-button, .ai-attach-button):active:not(:disabled) {
+  transform: translateY(1px) scale(.99);
+}
+.banking-app .main-nav button.active::after {
+  transform-origin: center;
+  animation: bank-nav-settle var(--motion-standard) var(--motion-ease) backwards;
+}
+
+/* Enter only small surfaces and text; never the viewport or financial tables. */
+.bank-main > :is(.page-heading, .data-context),
+.bank-main .section-heading,
+.overview-grid > :is(.balance-card, .ai-intro-card),
+.accounts-grid > .account-card,
+.institution-metrics > .metric-card,
+.bank-main :is(.institution-assistant-card, .unavailable-product),
+.ai-welcome > :is(.ai-welcome-icon, .ai-welcome-eyebrow, h1, .ai-welcome-subtitle),
+.ai-suggestion-grid > .ai-suggestion-card,
+.ai-message > .ai-message-label,
+.ai-message:not(:has(table, .ai-chart)) > .ai-message-markdown {
+  animation: bank-content-enter var(--motion-entry) var(--motion-ease) backwards;
+  animation-delay: var(--entry-delay, 0ms);
+}
+.overview-grid > :nth-child(2),
+.accounts-grid > :nth-child(2),
+.institution-metrics > :nth-child(2),
+.ai-suggestion-grid > :nth-child(2),
+.ai-welcome > h1 { --entry-delay: 35ms; }
+.accounts-grid > :nth-child(3),
+.institution-metrics > :nth-child(3),
+.ai-suggestion-grid > :nth-child(3),
+.ai-welcome > .ai-welcome-subtitle { --entry-delay: 70ms; }
+.accounts-grid > :nth-child(n+4),
+.ai-suggestion-grid > :nth-child(n+4) { --entry-delay: 105ms; }
+
+/* Keep the existing immediate visibility/pointer guards during width changes. */
+.ai-workspace-body { transition: grid-template-columns var(--motion-entry) var(--motion-ease); }
+.ai-workspace .ai-sidebar { opacity: 1; transition: opacity var(--motion-quick) ease; }
+.ai-workspace .ai-sidebar-collapsed .ai-sidebar { opacity: 0; }
+
+@keyframes bank-content-enter {
+  from { opacity: .65; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes bank-nav-settle {
+  from { opacity: .65; transform: scaleX(.7); }
+  to { opacity: 1; transform: scaleX(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .banking-app :is(.primary-button, .secondary-button, .text-button, .icon-button, .assistant-launcher, .main-nav button),
+  .bank-main > :is(.page-heading, .data-context),
+  .bank-main .section-heading,
+  .overview-grid > :is(.balance-card, .ai-intro-card),
+  .accounts-grid > .account-card,
+  .institution-metrics > .metric-card,
+  .bank-main :is(.institution-assistant-card, .unavailable-product),
+  .ai-workspace :is(.ai-icon-button, .ai-back-button, .ai-new-conversation, .ai-dashboard-link, .ai-send-button, .ai-attach-button, .ai-pending-attachments button, .ai-history-item, .ai-suggestion-card, .ai-composer, .ai-sidebar),
+  .ai-welcome > :is(.ai-welcome-icon, .ai-welcome-eyebrow, h1, .ai-welcome-subtitle),
+  .ai-message > .ai-message-label,
+  .ai-message:not(:has(table, .ai-chart)) > .ai-message-markdown,
+  .banking-app .main-nav button.active::after,
+  .ai-workspace-body {
+    animation: none !important;
+    transition: none !important;
+  }
+  .banking-app :is(.primary-button, .secondary-button, .icon-button, .assistant-launcher):is(:hover, :active),
+  .ai-workspace :is(.ai-icon-button, .ai-back-button, .ai-new-conversation, .ai-suggestion-card, .ai-send-button, .ai-attach-button):is(:hover, :active) {
+    transform: none !important;
+  }
+}

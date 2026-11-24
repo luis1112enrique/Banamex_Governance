@@ -27,6 +27,7 @@ import matplotlib.ticker as mticker
 from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 from langsmith import traceable
+from tools.chart_context import chart_units
 
 CHARTS_DIR = Path(__file__).parent.parent / "outputs" / "charts"
 
@@ -257,11 +258,23 @@ def render_chart_from_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
     y_label = str(spec.get("y_label") or "")
     value_prefix = str(spec.get("value_prefix") or "")
 
-    # Auto-detectar prefijo de moneda si y_label menciona MXN, saldo o monto
-    if not value_prefix and any(w in y_label.lower() for w in ("mxn", "peso", "saldo", "importe", "monto", "$")):
+    verified_units, currency = chart_units.get()
+    if verified_units:
+        value_prefix = f"{currency} " if currency else ""
+        if not currency:
+            def without_unverified_currency(label: str) -> str:
+                label = re.sub(r"\b(?:MXN|USD|EUR|GBP|pesos(?: mexicanos)?|d[oó]lares)\b|[$€£¥]", "", label, flags=re.IGNORECASE)
+                return re.sub(r"\(\s*\)", "", label).strip()
+            title = without_unverified_currency(title)
+            y_label = without_unverified_currency(y_label)
+    elif not value_prefix and any(w in y_label.lower() for w in ("mxn", "peso", "saldo", "importe", "monto", "$")):
         value_prefix = "$"
 
     labels, series = _normalize_series(spec)
+    if verified_units and not currency:
+        for item in series:
+            if "name" in item:
+                item["name"] = without_unverified_currency(str(item["name"]))
     if not labels or not series:
         raise ValueError("No hay datos suficientes para generar la gráfica.")
 
@@ -443,7 +456,7 @@ def render_chart_from_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
             ax.legend(frameon=True, facecolor="#FFFFFF", edgecolor="#E0E0E0")
 
     # Títulos y ejes
-    ax.set_title(title, fontsize=13.5, fontweight="bold", color="#003366", pad=16)
+    ax.set_title(title, fontsize=13.5, fontweight="bold", color="#003746" if verified_units else "#003366", pad=16)
     if chart_type not in ("pie", "donut"):
         if x_label:
             ax.set_xlabel(x_label, fontsize=10.5, fontweight="bold", color="#374151", labelpad=10)
@@ -459,7 +472,7 @@ def render_chart_from_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
     fig.text(
         0.99,
         0.01,
-        "Fuente: Grupo Financiero Banamex — Plataforma Data Steward",
+        "Prototipo de innovación — entorno de pruebas" if verified_units else "Fuente: Grupo Financiero Banamex — Plataforma Data Steward",
         ha="right",
         va="bottom",
         fontsize=8,

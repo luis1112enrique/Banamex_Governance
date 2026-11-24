@@ -49,7 +49,16 @@ FORBIDDEN_SQL_KEYWORDS = (
 
 
 def get_db_instance() -> SQLDatabase:
-    return SQLDatabase.from_uri(DB_URI)
+    # Keep every connection read-only, including SQL generated in test sessions.
+    # Credentials and source selection remain those configured by the operator.
+    return SQLDatabase.from_uri(
+        DB_URI,
+        engine_args={
+            "connect_args": {
+                "options": "-cdefault_transaction_read_only=on -csearch_path=dim,cfg,public -cstatement_timeout=15000"
+            }
+        },
+    )
 
 
 def get_sql_llm():
@@ -142,8 +151,15 @@ def validate_sql_for_role(sql: str, user_role: str, cliente_id: Optional[int]) -
         if re.search(rf"\b{kw}\b", trimmed_semi, flags=re.IGNORECASE):
             return False, f"Consulta bloqueada por política de solo lectura (operación no permitida: {kw})."
 
-    # Si el rol es universal, solo aplican las reglas de solo lectura
+    # Institutional access covers the business model, not PostgreSQL files,
+    # system catalogs or administrative/side-effect functions.
     if user_role == "universal":
+        from tools.sql_scope import ClientScopeError, scope_business_sql
+
+        try:
+            scope_business_sql(trimmed_semi)
+        except ClientScopeError as exc:
+            return False, str(exc)
         return True, "OK"
 
     # 3. Validaciones estrictas de Row-Level Security para rol 'cliente'
@@ -405,9 +421,23 @@ def run_sql_agent(
                 "error": "ACCESS_DENIED",
             }
 
+        # Apply the role's scope before fetching the structured rows used for charts.
+        if role == "cliente":
+            from tools.sql_scope import ClientScopeError, scope_client_sql
+
+            try:
+                clean_sql, parameters = scope_client_sql(clean_sql, cliente_id)
+            except ClientScopeError as exc:
+                return {"sql_query": None, "raw_result": None, "summary": str(exc), "error": "ACCESS_DENIED"}
+        else:
+            from tools.sql_scope import scope_business_sql
+
+            clean_sql = scope_business_sql(clean_sql)
+            parameters = {}
+
         # Ejecución segura en PostgreSQL con extracción de datos estructurados (para graficación con 0 tokens)
         with db._engine.connect() as connection:
-            exec_res = connection.execute(text(clean_sql))
+            exec_res = connection.execute(text(clean_sql), parameters)
             columns = list(exec_res.keys())
             raw_rows = exec_res.fetchall()
 
