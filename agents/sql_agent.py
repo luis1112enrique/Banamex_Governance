@@ -405,19 +405,45 @@ def run_sql_agent(
                 "error": "ACCESS_DENIED",
             }
 
-        # Ejecución segura en PostgreSQL
-        db_result = db.run(clean_sql)
+        # Ejecución segura en PostgreSQL con extracción de datos estructurados (para graficación con 0 tokens)
+        with db._engine.connect() as connection:
+            exec_res = connection.execute(text(clean_sql))
+            columns = list(exec_res.keys())
+            raw_rows = exec_res.fetchall()
+
+            clean_rows = []
+            for row in raw_rows:
+                clean_row = []
+                for val in row:
+                    if hasattr(val, "isoformat"):
+                        clean_row.append(val.isoformat())
+                    elif isinstance(val, (int, float)):
+                        clean_row.append(val)
+                    elif val is None:
+                        clean_row.append(None)
+                    else:
+                        try:
+                            clean_row.append(float(val))
+                        except (ValueError, TypeError):
+                            clean_row.append(str(val))
+                clean_rows.append(clean_row)
 
         evidence_summary = (
             f"Consulta SQL ejecutada (Rol: {role}"
             + (f", num_cte={cliente_id}" if role == "cliente" else "")
             + f"):\n```sql\n{clean_sql}\n```\n\n"
-            f"Resultado crudo de la base de datos:\n{db_result}"
+            f"Resultado de la base de datos ({len(clean_rows)} registros):\n"
+            + str(clean_rows[:15])
+            + (f"\n... y {len(clean_rows) - 15} registros más" if len(clean_rows) > 15 else "")
         )
 
         return {
             "sql_query": clean_sql,
-            "raw_result": db_result,
+            "raw_result": str(clean_rows),
+            "structured_data": {
+                "columns": columns,
+                "rows": clean_rows,
+            },
             "summary": evidence_summary,
             "error": None,
         }

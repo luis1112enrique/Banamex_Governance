@@ -26,6 +26,8 @@ from langchain_ollama import ChatOllama
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langsmith import traceable
 
+from tools.chart_tool import build_chart_spec_from_sql
+
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", "gemini-3.5-flash")
@@ -414,7 +416,7 @@ def coordinator_node(state: dict) -> dict:
         sql_ev = evidences.get("sql_evidence", {})
         sql_succeeded = isinstance(sql_ev, dict) and not sql_ev.get("error")
 
-        # Encadenamiento Multi-Hop 1: SQL -> Orquestador -> Chart Tool
+        # Encadenamiento Multi-Hop 1: SQL -> Orquestador -> Chart Tool (Optimizado a CERO TOKENS)
         if (
             last_spoke == "sql_agent"
             and sql_succeeded
@@ -422,6 +424,25 @@ def coordinator_node(state: dict) -> dict:
             and step_count < MAX_MULTI_HOP_STEPS
             and _question_requests_chart(question)
         ):
+            # Optimización CERO-TOKENS: extracción determinista directa de SQL estructurado a Chart Spec
+            structured_data = sql_ev.get("structured_data")
+            chart_spec = None
+            if structured_data and isinstance(structured_data, dict):
+                cols = structured_data.get("columns", [])
+                rows = structured_data.get("rows", [])
+                if cols and rows:
+                    chart_spec = build_chart_spec_from_sql(cols, rows, question=question)
+
+            if chart_spec:
+                return {
+                    "plan": "Encadenamiento determinista SQL -> Chart Tool con datos estructurados (Cero Tokens de LLM).",
+                    "next_agent": "chart_tool",
+                    "spoke_instruction": json.dumps(chart_spec, ensure_ascii=False),
+                    "step_count": step_count + 1,
+                    "final_answer": None,
+                }
+
+            # Fallback a enrutamiento por LLM si el parser determinista no aplica
             followup = route_or_respond(
                 question,
                 messages,
@@ -430,7 +451,6 @@ def coordinator_node(state: dict) -> dict:
                 cliente_id=cliente_id,
             )
             if followup["next_agent"] == "chart_tool":
-                # Importante: NO devolver "evidences": {} para conservar sql_evidence
                 return {
                     "plan": followup["plan"],
                     "next_agent": "chart_tool",

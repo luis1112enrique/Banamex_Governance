@@ -111,10 +111,145 @@ def _normalize_series(spec: Dict[str, Any]) -> tuple[List[str], List[Dict[str, A
     raise ValueError("La especificación de la gráfica no incluye 'series' ni 'values'.")
 
 
+MONTH_NAMES_ES = {
+    "01": "Ene", "02": "Feb", "03": "Mar", "04": "Abr",
+    "05": "May", "06": "Jun", "07": "Jul", "08": "Ago",
+    "09": "Sep", "10": "Oct", "11": "Nov", "12": "Dic"
+}
+
+
+def _format_date_label(val: Any) -> str:
+    """Convierte fechas numéricas tipo YYYYMMDD o YYYYMM a etiquetas legibles en español."""
+    s = str(val).strip()
+    if len(s) == 8 and s.isdigit():
+        y, m = s[:4], s[4:6]
+        return f"{MONTH_NAMES_ES.get(m, m)} {y}"
+    if len(s) == 6 and s.isdigit():
+        y, m = s[:4], s[4:6]
+        return f"{MONTH_NAMES_ES.get(m, m)} {y}"
+    return s
+
+
+def build_chart_spec_from_sql(
+    columns: List[str],
+    rows: List[List[Any]],
+    question: str = ""
+) -> Optional[Dict[str, Any]]:
+    """
+    Construye determinísticamente la especificación JSON de la gráfica a partir de los datos
+    estructurados de PostgreSQL (0 Tokens de LLM consumidos).
+    
+    Soporta:
+    - 2 columnas: [Etiqueta / Fecha, Métrica Numérica]
+    - 3 columnas: [Eje X / Fecha, Categoría / Serie, Métrica Numérica] (Pivote automático multi-serie)
+    - Detección inteligente de tipo de gráfica según intención del usuario o estructura temporal.
+    """
+    if not columns or not rows:
+        return None
+
+    q_lower = (question or "").lower()
+
+    # 1. Detección inteligente del tipo de gráfica
+    if any(w in q_lower for w in ["dona", "donut"]):
+        chart_type = "donut"
+    elif any(w in q_lower for w in ["pastel", "pie", "proporcion", "proporción", "distribucion", "distribución", "reparto"]):
+        chart_type = "pie"
+    elif any(w in q_lower for w in ["horizontal", "ranking", "top", "mayor a menor", "menor a mayor"]):
+        chart_type = "horizontal_bar"
+    elif any(w in q_lower for w in ["área", "area", "acumulad"]):
+        chart_type = "area"
+    elif any(w in q_lower for w in ["linea", "línea", "line", "crecimiento", "evolucion", "evolución", "mensual", "tendencia", "tiempo", "histórico"]):
+        chart_type = "line"
+    elif any(w in q_lower for w in ["barra", "barras", "bar"]):
+        chart_type = "bar"
+    else:
+        # Default según estructura de datos: si col 0 es temporal -> line; si no -> bar
+        first_col = str(columns[0]).lower()
+        if any(d in first_col for d in ["fec", "mes", "fecha", "vintage", "mob", "corte"]):
+            chart_type = "line"
+        else:
+            chart_type = "bar"
+
+    # Detección de prefijo monetario
+    val_prefix = "$" if any(w in " ".join(columns).lower() for w in ["saldo", "monto", "importe", "pesos", "mxn", "amt", "revenue", "expense"]) else ""
+
+    # Caso 1: 3 Columnas -> [Dimensión X (e.g. Fecha), Categoría Serie (e.g. Producto), Valor (e.g. Saldo)]
+    if len(columns) == 3:
+        x_col, cat_col, val_col = columns
+        labels = []
+        for r in rows:
+            fmt_lbl = _format_date_label(r[0])
+            if fmt_lbl not in labels:
+                labels.append(fmt_lbl)
+
+        categories = []
+        for r in rows:
+            c = str(r[1])
+            if c not in categories:
+                categories.append(c)
+
+        val_map = {}
+        for r in rows:
+            fmt_lbl = _format_date_label(r[0])
+            cat = str(r[1])
+            try:
+                val = float(r[2]) if r[2] is not None else 0.0
+            except (ValueError, TypeError):
+                val = 0.0
+            val_map[(fmt_lbl, cat)] = val
+
+        series = []
+        for cat in categories:
+            series.append({
+                "name": cat,
+                "values": [val_map.get((lbl, cat), 0.0) for lbl in labels]
+            })
+
+        if chart_type == "bar" and len(series) > 1:
+            chart_type = "grouped_bar"
+
+        return {
+            "chart_type": chart_type,
+            "title": f"Análisis de {val_col.replace('_', ' ').title()} por {x_col.replace('_', ' ').title()}",
+            "x_label": x_col.replace("_", " ").title(),
+            "y_label": val_col.replace("_", " ").title(),
+            "value_prefix": val_prefix,
+            "labels": labels,
+            "series": series
+        }
+
+    # Caso 2: 2 Columnas -> [Etiqueta / Dimensión X, Métrica Y]
+    elif len(columns) == 2:
+        lbl_col, val_col = columns
+        labels = [_format_date_label(r[0]) for r in rows]
+        vals = []
+        for r in rows:
+            try:
+                vals.append(float(r[1]) if r[1] is not None else 0.0)
+            except (ValueError, TypeError):
+                vals.append(0.0)
+
+        # Si el usuario pidió pastel/dona o es proporción, validamos que no tenga demasiadas rebanadas
+        if chart_type in ("pie", "donut") and len(labels) > 7:
+            chart_type = "bar"
+
+        return {
+            "chart_type": chart_type,
+            "title": f"Distribución de {val_col.replace('_', ' ').title()} por {lbl_col.replace('_', ' ').title()}",
+            "x_label": lbl_col.replace("_", " ").title(),
+            "y_label": val_col.replace("_", " ").title(),
+            "value_prefix": val_prefix,
+            "labels": labels,
+            "series": [{"name": val_col.replace("_", " ").title(), "values": vals}]
+        }
+
+    return None
+
+
 def render_chart_from_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
     """Renderiza la gráfica en disco usando Matplotlib y retorna metadatos + ruta PNG."""
     chart_type = str(spec.get("chart_type", "line")).lower().strip()
-    if chart_type not in ("line", "bar", "grouped_bar", "pie"):
+    if chart_type not in ("line", "bar", "grouped_bar", "pie", "donut", "horizontal_bar", "area"):
         chart_type = "line"
 
     title = str(spec.get("title") or "Análisis Financiero — Grupo Financiero Banamex")
@@ -251,9 +386,65 @@ def render_chart_from_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
             at.set_fontsize(9.5)
         ax.axis("equal")
 
+    elif chart_type == "donut":
+        vals = series[0]["values"]
+        colors = [BANAMEX_PALETTE[i % len(BANAMEX_PALETTE)] for i in range(len(labels))]
+        wedges, texts, autotexts = ax.pie(
+            vals,
+            labels=labels,
+            autopct="%1.1f%%",
+            startangle=140,
+            colors=colors,
+            pctdistance=0.78,
+            wedgeprops={"width": 0.42, "edgecolor": "#FFFFFF", "linewidth": 1.5},
+        )
+        for at in autotexts:
+            at.set_color("#FFFFFF")
+            at.set_fontweight("bold")
+            at.set_fontsize(9.5)
+        total_val = sum(vals)
+        ax.text(0, 0, f"Total\n{_format_human_number(total_val, value_prefix)}", ha="center", va="center", fontsize=11, fontweight="bold", color="#003366")
+        ax.axis("equal")
+
+    elif chart_type == "horizontal_bar":
+        vals = series[0]["values"]
+        y_pos = list(range(len(labels)))
+        colors = [BANAMEX_PALETTE[i % len(BANAMEX_PALETTE)] for i in range(len(labels))] if len(labels) <= 6 else BANAMEX_PALETTE[0]
+        bars = ax.barh(y_pos, vals, color=colors, height=0.58, edgecolor="#FFFFFF", linewidth=0.8)
+        for bar, val in zip(bars, vals):
+            ax.annotate(
+                _format_human_number(val, value_prefix),
+                (bar.get_width(), bar.get_y() + bar.get_height() / 2),
+                textcoords="offset points",
+                xytext=(6, 0),
+                va="center",
+                fontsize=9,
+                fontweight="bold",
+                color="#1F2937",
+            )
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(labels, fontsize=9.5)
+        ax.grid(True, axis="x", linestyle="--", alpha=0.45, color="#B0BEC5")
+        ax.set_axisbelow(True)
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: _format_human_number(x, value_prefix)))
+
+    elif chart_type == "area":
+        x_pos = list(range(len(labels)))
+        for idx, s in enumerate(series):
+            color = BANAMEX_PALETTE[idx % len(BANAMEX_PALETTE)]
+            vals = s["values"]
+            ax.fill_between(x_pos, vals, alpha=0.25, color=color)
+            ax.plot(x_pos, vals, marker="o", linewidth=2.5, markersize=6, color=color, label=s["name"])
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(labels, rotation=20 if len(labels) > 6 else 0, ha="right" if len(labels) > 6 else "center")
+        ax.grid(True, linestyle="--", alpha=0.45, color="#B0BEC5")
+        ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: _format_human_number(x, value_prefix)))
+        if len(series) > 1:
+            ax.legend(frameon=True, facecolor="#FFFFFF", edgecolor="#E0E0E0")
+
     # Títulos y ejes
     ax.set_title(title, fontsize=13.5, fontweight="bold", color="#003366", pad=16)
-    if chart_type != "pie":
+    if chart_type not in ("pie", "donut"):
         if x_label:
             ax.set_xlabel(x_label, fontsize=10.5, fontweight="bold", color="#374151", labelpad=10)
         if y_label:
