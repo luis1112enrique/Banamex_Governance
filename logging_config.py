@@ -47,9 +47,9 @@ def log_chart_generation(title: str, chart_type: str, chart_path: str, summary: 
     console.print(Panel(content, title="Spoke: Chart Tool (Matplotlib PNG)", border_style="magenta"))
 
 
-def log_ocr_extraction(files: list, result_summary: str):
-    content = f"[bold cyan]Archivos Cargados:[/bold cyan] {', '.join(files) or 'N/A'}\n\n[bold cyan]Resultado de Ingesta y OCR:[/bold cyan]\n{result_summary}"
-    console.print(Panel(content, title="Procesador OCR Local (Tesseract + PyPDFium2)", border_style="cyan"))
+def log_doc_analysis(files: list, result_summary: str):
+    content = f"[bold cyan]Archivos Inspeccionados:[/bold cyan] {', '.join(files) or 'N/A'}\n\n[bold cyan]Clasificación y Extracción Multimodal:[/bold cyan]\n{result_summary}"
+    console.print(Panel(content, title="Spoke: Doc Agent (Gemini Multimodal Vision)", border_style="cyan"))
 
 
 def log_final_response(answer: str, chart_path: str | None = None):

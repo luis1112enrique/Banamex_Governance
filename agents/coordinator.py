@@ -26,6 +26,8 @@ from langchain_ollama import ChatOllama
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langsmith import traceable
 
+from tools.chart_tool import build_chart_spec_from_sql
+
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 COORDINATOR_MODEL = os.environ.get("COORDINATOR_MODEL", "gemini-3.5-flash")
@@ -173,9 +175,8 @@ SPOKES ESPECIALIZADOS DISPONIBLES:
    - Ejemplos: "¿Cuántos clientes tenemos?", "¿Cuántos son mujeres?", "¿Qué cuentas puede tener un cliente?".
 
 2. 'rag_agent':
-   - Usar para buscar en la documentación oficial de Banamex indexada en Pinecone (contratos, comisiones, CAT, requisitos, políticas).
-   - También tiene acceso al texto de los documentos que el usuario haya cargado en esta conversación (procesados con OCR local). Si la pregunta se refiere a "el documento", "los archivos que subí", "si puedo abrir cuenta con estos papeles" o qué documentos faltan para un trámite, delega a 'rag_agent' y menciona los nombres de archivo en 'spoke_instruction'.
-   - Ejemplos: "¿Cuáles son las comisiones de la tarjeta Costco?", "¿Qué comisiones cobra MiCuenta Banamex?", "¿Puedo darme de alta con los documentos que subí?".
+   - Usar para buscar en la documentación oficial de Banamex indexada en Pinecone (contratos marco, comisiones, CAT, requisitos normativos oficiales, folletos de productos).
+   - Ejemplos: "¿Cuáles son las comisiones de la tarjeta Costco?", "¿Qué comisiones cobra MiCuenta Banamex?", "¿Cuáles son los requisitos oficiales para contratar un Crédito Personal o abrir cuenta?".
 
 3. 'chart_tool':
    - Usar para generar una gráfica corporativa en formato PNG (Matplotlib) cuando el usuario pida explícitamente una gráfica, visualización, barras, líneas o pastel.
@@ -195,24 +196,32 @@ SPOKES ESPECIALIZADOS DISPONIBLES:
        }}
      * Usa EXACTAMENTE los valores numéricos reales obtenidos en `sql_evidence` (sin redondeos inventados ni datos faltantes).
 
-4. 'FINISH' (Respuesta directa con memoria, RBAC o fuera de dominio):
+4. 'doc_agent':
+   - Usar para analizar, clasificar e inventariar documentos y archivos cargados por el cliente (imágenes, credenciales INE, comprobantes de domicilio, recibos de nómina en inputs/).
+   - Extrae qué tipo de documento es, su titular, vigencia y campos clave estructurados.
+   - REGLA CRÍTICA DE ORDEN MULTI-HOP (TRÁMITES DE CRÉDITO Y EXPEDIENTES):
+     * Si el usuario cargó archivos y pregunta si puede tramitar un crédito, abrir una cuenta o qué le falta:
+       Paso 1: Si `doc_evidence` NO existe todavía en este turno, **DEBES delegar PRIMERO a `'doc_agent'`** para obtener el inventario de lo que el cliente subió.
+       Paso 2: Una vez que `doc_evidence` ya existe, si la consulta requiere contrastar contra los requisitos oficiales de Banamex (ej. Crédito Personal, Cuenta Perfiles), **DEBES delegar a `'rag_agent'`** para recuperar el checklist normativo oficial.
+       Paso 3: Con ambos resultados (`doc_evidence` y `rag_evidence`), el Coordinador realiza la síntesis final de cotejo (Checklist Matching).
+
+5. 'FINISH' (Respuesta directa con memoria, RBAC o fuera de dominio):
    - Usar cuando la pregunta se puede responder con lo que YA se dijo en el historial previo, para saludos/despedidas, para rechazos RBAC o para consultas fuera de dominio bancario.
 
 INSTRUCCIONES DE ENRIQUECIMIENTO:
-- Si decides delegar a `'sql_agent'` o `'rag_agent'`, genera en `'spoke_instruction'` una instrucción técnica COMPLETA y SIN AMBIGÜEDADES, resolviendo pronombres y referencias anteriores.
-  * Ejemplo SQL para serie mensual: Si el usuario pide "gráfica del crecimiento mensual de las cuentas/saldos de los clientes", en el Paso 1 instruye a `'sql_agent'`:
-    "Consultar en cfg.fact_sdos_captacoloca_m el saldo total mensual (SUM(saldo_mes)) y conteo de cuentas (COUNT(DISTINCT num_cta)) agrupado por fec_informacion y ordenado por fec_informacion ASC."
-  * Ejemplo RAG: Si el usuario dice "¿Cuánto cobran de anualidad?", instruye:
-    "Comisión por anualidad de tarjetas de crédito Banamex en anexos de comisiones oficiales".
+- Si decides delegar a `'sql_agent'`, `'rag_agent'` o `'doc_agent'`, genera en `'spoke_instruction'` una instrucción técnica COMPLETA y SIN AMBIGÜEDADES, resolviendo pronombres y referencias anteriores.
+  * Ejemplo SQL: "Consultar en cfg.fact_sdos_captacoloca_m el saldo mensual de AHORRO y CHEQUES."
+  * Ejemplo RAG: "Requisitos oficiales y documentos exigidos para solicitud de Crédito Personal Banamex en contratos y folletos oficiales."
+  * Ejemplo Doc Agent: "Inspecciona y clasifica los documentos cargados por el cliente, extrayendo titular, vigencia y tipo de documento."
 
 FORMATO DE RESPUESTA OBLIGATORIO:
 Responde ÚNICAMENTE un objeto JSON válido con la siguiente estructura (sin texto antes ni después):
 {{
   "can_answer_directly": true | false,
   "direct_answer": "Respuesta completa si can_answer_directly es true; de lo contrario null",
-  "next_agent": "sql_agent" | "rag_agent" | "chart_tool" | "FINISH",
+  "next_agent": "sql_agent" | "rag_agent" | "chart_tool" | "doc_agent" | "FINISH",
   "plan": "Explicación breve de 1 línea de tu decisión",
-  "spoke_instruction": "Instrucción técnica para sql_agent/rag_agent, o el objeto/string JSON de especificación para chart_tool (o null si direct_answer)"
+  "spoke_instruction": "Instrucción técnica para el spoke correspondiente (o null si direct_answer)"
 }}
 """
 
@@ -238,6 +247,11 @@ REGLAS DE GOBERNANZA, ESTRUCTURA Y COMUNICACIÓN BANCARIA:
    - Si se generó una gráfica (`CHART_EVIDENCE`), confirma explícitamente el título de la gráfica generada, el tipo de visualización y la ruta del archivo PNG guardado, interpretando las tendencias o hallazgos clave visibles en los datos.
    - Si la evidencia indica ACCESO DENEGADO por RBAC/Secreto Bancario, informa con claridad y cortesía al cliente que no cuenta con permisos para consultar esa información y recuerda que su acceso se limita a su propio num_cte.
    - Si la evidencia proviene de RAG (Pinecone), cita explícitamente el documento oficial (ej. anexo_costco.pdf, contrato_cuenta_switch.pdf), las páginas de referencia y los montos exactos en pesos o porcentajes de comisiones/CAT.
+   - Si la evidencia contiene tanto `doc_evidence` (inventario de documentos del cliente) como `rag_evidence` (requisitos oficiales del banco):
+     * Realiza un COTEJO FORMAL Y RIGUROSO (Checklist Matching).
+     * Desglosa en una tabla comparativa clara:
+       | Requisito Oficial Banamex | Documento Presentado | Estado (Cumple / Falta / Vencido) | Observaciones |
+     * Dictamina con total claridad en la conclusión si el trámite o crédito procede, o especifica con viñetas los documentos exactos que faltan para completar la solicitud.
 2. Trazabilidad de origen: Menciona claramente de qué fuente oficial provino el dato.
 3. Estructura concisa y limpia (MÁXIMO 3 SECCIONES):
    - Sección 1: Fuente y certificación del dato.
@@ -298,7 +312,7 @@ def route_or_respond(
                 "spoke_instruction": None
             }
 
-        if next_agent not in ["sql_agent", "rag_agent", "chart_tool"]:
+        if next_agent not in ["sql_agent", "rag_agent", "chart_tool", "doc_agent"]:
             next_agent = "sql_agent"
 
         raw_instruction = parsed.get("spoke_instruction")
@@ -393,7 +407,7 @@ def coordinator_node(state: dict) -> dict:
 
     last_message = messages[-1] if messages else None
     last_spoke = getattr(last_message, "name", None) if last_message else None
-    is_spoke_return = last_spoke in ["sql_agent", "rag_agent", "chart_tool", "ocr_processor"]
+    is_spoke_return = last_spoke in ["sql_agent", "rag_agent", "chart_tool", "doc_agent"]
 
     # --------------------------------------------------------------------------
     # RETORNO DE UN SPOKE (Evaluación Multi-Hop o Síntesis Final)
@@ -402,7 +416,7 @@ def coordinator_node(state: dict) -> dict:
         sql_ev = evidences.get("sql_evidence", {})
         sql_succeeded = isinstance(sql_ev, dict) and not sql_ev.get("error")
 
-        # Encadenamiento Multi-Hop: SQL -> Orquestador -> Chart Tool
+        # Encadenamiento Multi-Hop 1: SQL -> Orquestador -> Chart Tool (Optimizado a CERO TOKENS)
         if (
             last_spoke == "sql_agent"
             and sql_succeeded
@@ -410,6 +424,25 @@ def coordinator_node(state: dict) -> dict:
             and step_count < MAX_MULTI_HOP_STEPS
             and _question_requests_chart(question)
         ):
+            # Optimización CERO-TOKENS: extracción determinista directa de SQL estructurado a Chart Spec
+            structured_data = sql_ev.get("structured_data")
+            chart_spec = None
+            if structured_data and isinstance(structured_data, dict):
+                cols = structured_data.get("columns", [])
+                rows = structured_data.get("rows", [])
+                if cols and rows:
+                    chart_spec = build_chart_spec_from_sql(cols, rows, question=question)
+
+            if chart_spec:
+                return {
+                    "plan": "Encadenamiento determinista SQL -> Chart Tool con datos estructurados (Cero Tokens de LLM).",
+                    "next_agent": "chart_tool",
+                    "spoke_instruction": json.dumps(chart_spec, ensure_ascii=False),
+                    "step_count": step_count + 1,
+                    "final_answer": None,
+                }
+
+            # Fallback a enrutamiento por LLM si el parser determinista no aplica
             followup = route_or_respond(
                 question,
                 messages,
@@ -418,7 +451,6 @@ def coordinator_node(state: dict) -> dict:
                 cliente_id=cliente_id,
             )
             if followup["next_agent"] == "chart_tool":
-                # Importante: NO devolver "evidences": {} para conservar sql_evidence
                 return {
                     "plan": followup["plan"],
                     "next_agent": "chart_tool",
@@ -427,13 +459,39 @@ def coordinator_node(state: dict) -> dict:
                     "final_answer": None,
                 }
 
-        # Pass-Through Inteligente para RAG Spoke Puro:
+        # Encadenamiento Multi-Hop 2: Doc Agent -> Orquestador -> RAG Agent
+        # Tras clasificar los archivos del cliente, si se evalúa un trámite (ej. crédito, cuenta),
+        # se consulta inmediatamente a RAG Agent para obtener los requisitos normativos oficiales.
+        if (
+            last_spoke == "doc_agent"
+            and "doc_evidence" in evidences
+            and "rag_evidence" not in evidences
+            and step_count < MAX_MULTI_HOP_STEPS
+        ):
+            followup = route_or_respond(
+                question,
+                messages,
+                evidences=evidences,
+                user_role=user_role,
+                cliente_id=cliente_id,
+            )
+            if followup["next_agent"] == "rag_agent":
+                return {
+                    "plan": followup["plan"],
+                    "next_agent": "rag_agent",
+                    "spoke_instruction": followup["spoke_instruction"],
+                    "step_count": step_count + 1,
+                    "final_answer": None,
+                }
+
+        # Pass-Through Inteligente para RAG Spoke Puro (sin cruce con SQL, Chart o Doc Agent):
         # El rag_agent ya sintetizó la evidencia con Gemini 3.6 Flash y máximo rigor contractual.
         # Evitamos una segunda llamada redundante al LLM que consumiría tokens y podría alterar montos/cláusulas.
         if (
             last_spoke == "rag_agent"
             and "sql_evidence" not in evidences
             and "chart_evidence" not in evidences
+            and "doc_evidence" not in evidences
         ):
             rag_ev = evidences.get("rag_evidence", {})
             if isinstance(rag_ev, dict) and not rag_ev.get("error"):
